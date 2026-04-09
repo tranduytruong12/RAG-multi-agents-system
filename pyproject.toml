@@ -16,13 +16,14 @@ packages = [
 ]
 
 [tool.poetry.dependencies]
-python = "^3.11"
+python = "^3.12"
 
 # ── LlamaIndex Core & Integrations ─────────────────────────────────────────
 llama-index-core = ">=0.10"
 llama-index-vector-stores-chroma = ">=0.1"
 llama-index-embeddings-openai = ">=0.1"
 llama-index-readers-file = ">=0.1"
+llama-index-retrievers-bm25 = ">=0.1"
 # ── LangGraph & LangChain (Agent Orchestration) ────────────────────────────
 langgraph = ">=0.2"
 langchain-core = ">=0.2"
@@ -82,11 +83,11 @@ addopts = "--cov=. --cov-report=term-missing --cov-report=html"
 
 [tool.ruff]
 line-length = 88
-target-version = "py311"
+target-version = "py312"
 select = ["E", "F", "I", "UP", "B", "SIM"]
 ignore = ["E501"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = true
 ignore_missing_imports = true

@@ -224,7 +224,7 @@ print(f'   Embed: {settings.embed_model_name}')
 ```
 ---
 
-### 🔲 Sprint 1 — Ingestion Pipeline *(Week 1 — Prompt 1 TODOs)*
+### ✅ Sprint 1 — Ingestion Pipeline *(Week 1 — Prompt 1 TODOs)*
 
 **Goal:** Load real `.md` and `.pdf` documents from disk, chunk them into `DocumentChunk` objects. No vector storage yet.
 
@@ -269,7 +269,7 @@ pytest tests/test_loaders.py tests/test_chunkers.py -v   # all pass
 
 ---
 
-### 🔲 Sprint 2 — Retrieval & Vector Search *(Week 2 — Prompt 2)*
+### ✅ Sprint 2 — Retrieval & Vector Search *(Week 2 — Prompt 2)*
 
 **Goal:** Connect ChromaDB, embed chunks, and retrieve relevant context for any query using hybrid search.
 
@@ -305,7 +305,7 @@ pytest tests/test_retriever.py -v   # all pass
 
 ---
 
-### 🔲 Sprint 3 — Multi-Agent DAG *(Week 3 — Prompt 3A)*
+### ✅ Sprint 3 — Multi-Agent DAG *(Week 3 — Prompt 3A)*
 
 **Goal:** Build the full LangGraph state machine. All 4 agents implemented and connected. QA retry loop working.
 

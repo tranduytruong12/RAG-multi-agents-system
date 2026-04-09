@@ -281,18 +281,18 @@ pytest tests/test_loaders.py tests/test_chunkers.py -v   # all pass
 #### Tasks
 
 **`retrieval/vector_store.py`**
-- [ ] Implement `VectorStoreManager.connect()` — init `chromadb.HttpClient`, wrap in `ChromaVectorStore` + `StorageContext`
-- [ ] Implement `VectorStoreManager.add_nodes(nodes)` — build `VectorStoreIndex` from `TextNode` list with OpenAI embeddings
-- [ ] Implement `VectorStoreManager.delete_collection()` — drop and recreate collection for full re-ingest
-- [ ] Wire into `IngestionPipeline.run()` embed+store step (complete the Phase 1B TODO)
+- [x] Implement `VectorStoreManager.connect()` — init `chromadb.HttpClient`, wrap in `ChromaVectorStore` + `StorageContext`
+- [x] Implement `VectorStoreManager.add_nodes(nodes)` — build `VectorStoreIndex` from `TextNode` list with OpenAI embeddings
+- [x] Implement `VectorStoreManager.delete_collection()` — drop and recreate collection for full re-ingest
+- [x] Wire into `IngestionPipeline.run()` embed+store step
 
 **`retrieval/retriever.py`**
-- [ ] Implement `HybridRetriever.build_index()` — load `VectorStoreIndex` from existing ChromaDB collection
-- [ ] Implement `HybridRetriever.retrieve(query, top_k)`:
+- [x] Implement `HybridRetriever.build_index()` — load `VectorStoreIndex` from existing ChromaDB collection
+- [x] Implement `HybridRetriever.retrieve(query, top_k)`:
   - Dense path: `VectorIndexRetriever` (cosine similarity)
   - Sparse path: `BM25Retriever` on stored nodes
   - Fusion: `QueryFusionRetriever` with `mode="reciprocal_rerank"` (RRF)
-- [ ] Convert `NodeWithScore` list → `list[RetrievalResult]` (no LlamaIndex types leak out)
+- [x] Convert `NodeWithScore` list → `list[RetrievalResult]` (no LlamaIndex types leak out)
 
 **`retrieval/reranker.py`**
 - [x] Implement `ContextRanker.rank()` — LLM-based relevance re-scoring or cross-encoder
@@ -318,60 +318,38 @@ pytest tests/test_retriever.py -v   # all pass
 #### Tasks
 
 **`agents/intent_classifier.py`**
-- [ ] Implement `IntentClassifierAgent.classify(query)` using `ChatOpenAI` + few-shot `ChatPromptTemplate`
-- [ ] Parse LLM output → validate against `VALID_INTENTS`, raise `IntentClassificationError` if invalid
-- [ ] Add tenacity retry decorator (`@retry(stop=stop_after_attempt(3)`)
+- [x] Implement `IntentClassifierAgent.classify(query)` using `ChatOpenAI` + few-shot `ChatPromptTemplate`
+- [x] Parse LLM output → validate against `VALID_INTENTS`, raise `IntentClassificationError` if invalid
+- [x] Add tenacity retry decorator (`@retry(stop=stop_after_attempt(3)`)
 
 **`agents/drafter.py`**
-- [ ] Implement `DraftWriterAgent.draft(state)`:
-  - Build context string from `state["retrieved_context"]`
-  - Use prompt: `"Given context: {context}\nIntent: {intent}\nDraft a professional reply to: {query}"`
-  - Call `ChatOpenAI(model=settings.llm_model_name, temperature=0.0)`
-  - If `state["human_feedback"]` is set, incorporate it into prompt
+- [x] Implement `DraftWriterAgent.draft(state)`:
+  - [x] Build context string from `state["retrieved_context"]`
+  - [x] Use prompt: `"Given context: {context}\nIntent: {intent}\nDraft a professional reply to: {query}"`
+  - [x] Call `ChatOpenAI(model=settings.llm_model_name, temperature=0.0)`
+  - [x] If `state["human_feedback"]` is set, incorporate it into prompt
 
 **`agents/qa_agent.py`**
-- [ ] Implement `QAAgent.verify(state)` using `ChatOpenAI.with_structured_output(QAVerdict)`
-- [ ] Prompt checks: tone, accuracy vs retrieved context, policy completeness
-- [ ] Return fully populated `QAVerdict` Pydantic model
+- [x] Implement `QAAgent.verify(state)` using `ChatOpenAI.with_structured_output(QAVerdict)`
+- [x] Prompt checks: tone, accuracy vs retrieved context, policy completeness
+- [x] Return fully populated `QAVerdict` Pydantic model
 
 **`agents/orchestrator.py`**
-- [ ] Define LangGraph `StateGraph` with `SupportState` schema
-- [ ] Add nodes: `classify_intent`, `retrieve`, `draft_reply`, `qa_check`, `finalize`, `escalate`
-- [ ] Add edges:
+- [x] Define LangGraph `StateGraph` with `SupportState` schema
+- [x] Add nodes: `classify_intent`, `retrieve`, `draft_reply`, `qa_check`, `finalize`, `escalate`
+- [x] Add edges:
   - `classify_intent → retrieve → draft_reply → qa_check`
   - Conditional: `qa_check → draft_reply` (if not passed AND retry_count < max)
   - Conditional: `qa_check → escalate` (if retry_count >= max)
   - Conditional: `qa_check → finalize` (if passed)
-- [ ] Compile graph: `graph = builder.compile(checkpointer=MemorySaver())`
-- [ ] Implement `OrchestratorAgent.run(state)` — invoke compiled graph
+- [x] Compile graph: `graph = builder.compile(checkpointer=MemorySaver())`
+- [x] Implement `OrchestratorAgent.run(state)` — invoke compiled graph
 
 **Tests**
-- [ ] `tests/test_agents.py` — test state transitions with all sub-agents mocked
+- [x] `tests/test_agents.py` — test state transitions with all sub-agents mocked
 
 #### 🏁 Milestone — Sprint 3 Done When:
 ```bash
-python -c "
-import asyncio
-from agents.orchestrator import OrchestratorAgent
-from core.types import SupportState
-
-async def test():
-    agent = OrchestratorAgent()
-    initial_state: SupportState = {
-        'user_query': 'I need a refund for order #1234',
-        'session_id': 'test-session-1',
-        'intent': '', 'retrieved_context': [],
-        'draft_reply': '', 'final_reply': '',
-        'retry_count': 0, 'metadata': {},
-        'requires_human_review': False,
-        'human_feedback': None, 'messages': [],
-    }
-    final_state = await agent.run(initial_state)
-    print(f'✅ Intent: {final_state[\"intent\"]}')
-    print(f'✅ Reply: {final_state[\"final_reply\"][:100]}...')
-
-asyncio.run(test())
-"
 pytest tests/test_agents.py -v   # all pass
 ```
 

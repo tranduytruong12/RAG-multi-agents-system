@@ -20,6 +20,7 @@ import time
 from pathlib import Path
 
 from llama_index.core import Document
+from llama_index.core.schema import TextNode
 
 from core.exceptions import IngestionError, LoaderError
 from core.logging import get_logger
@@ -71,53 +72,6 @@ class IngestionPipeline:
         Raises:
             IngestionError: If the directory does not exist or if the chunking
                 or embedding stages fail entirely (not per-file failures).
-
-        # TODO — PHASE 1A (LOAD + CHUNK):
-        #   1. Validate source_dir: if not source_dir.exists(), raise IngestionError.
-        #   2. Start timer: `start = time.monotonic()`
-        #
-        #   LOAD PHASE:
-        #   3. Load Markdown: `md_docs = await self.markdown_loader.load_directory(source_dir)`
-        #      Catch LoaderError per file using load_directory's internal skip logic.
-        #   4. Find PDFs: `pdf_paths = list(source_dir.rglob("*.pdf"))`
-        #   5. For each pdf_path, call `await self.pdf_loader.load(pdf_path)`.
-        #      Wrap in try/except LoaderError:
-        #        - On success: extend pdf_docs list.
-        #        - On LoaderError: append str(pdf_path) to `failed_documents`.
-        #   6. Combine: `all_docs = md_docs + pdf_docs`
-        #   7. Log: logger.info("load_phase_complete", doc_count=len(all_docs))
-        #
-        #   CHUNK PHASE:
-        #   8. `chunks = await self.chunker.chunk(all_docs)`
-        #   9. Log: logger.info("chunk_phase_complete", chunk_count=len(chunks))
-        #
-        # TODO — PHASE 1B (EMBED + STORE — implement after retrieval/ is built):
-        #   10. Import VectorStoreManager from retrieval.vector_store.
-        #   11. Convert DocumentChunk list to LlamaIndex TextNode list:
-        #         from llama_index.core.schema import TextNode
-        #         nodes = [
-        #             TextNode(
-        #                 text=chunk.content,
-        #                 id_=chunk.chunk_id,
-        #                 metadata=chunk.metadata,
-        #             )
-        #             for chunk in chunks
-        #         ]
-        #   12. Call: `await VectorStoreManager().add_nodes(nodes)`
-        #       This triggers embedding generation + ChromaDB upsert.
-        #
-        #   BUILD RESULT:
-        #   13. `duration = time.monotonic() - start`
-        #   14. Return IngestionResult(
-        #           total_documents=len(all_docs),
-        #           total_chunks=len(chunks),
-        #           failed_documents=failed_documents,
-        #           success=len(failed_documents) == 0,
-        #           duration_seconds=round(duration, 3),
-        #       )
-        #   15. Log summary: logger.info("ingestion_complete",
-        #           total_docs=len(all_docs), total_chunks=len(chunks),
-        #           failures=len(failed_documents), duration_s=duration)
         """
         if not source_dir.exists():
             raise IngestionError(
@@ -129,7 +83,29 @@ class IngestionPipeline:
         logger.info("load_phase_complete", doc_count=len(successful_docs))
         chunks = await self.chunker.chunk(successful_docs)
         logger.info("chunk_phase_complete", chunk_count=len(chunks))
-
+        from retrieval.vector_store import VectorStoreManager
+        nodes = [
+            TextNode(
+                text=chunk.content,
+                id_=chunk.chunk_id,
+                metadata=chunk.metadata,
+            )
+            for chunk in chunks
+        ]
+        vector_store_manager = VectorStoreManager()
+        await vector_store_manager.connect()
+        await vector_store_manager.add_nodes(nodes)
+        duration = time.monotonic() - start
+        return IngestionResult(
+            total_documents=len(successful_docs),
+            total_chunks=len(chunks),
+            failed_documents=failed_docs,
+            success=len(failed_docs) == 0,
+            duration_seconds=round(duration, 3),
+        )
+        logger.info("ingestion_complete",
+                    total_docs=len(successful_docs), total_chunks=len(chunks),
+                    failures=len(failed_docs), duration_s=duration)
 
     async def _load_all_documents(
         self,
@@ -147,11 +123,6 @@ class IngestionPipeline:
         Returns:
             Tuple of (list[Document], list[str failed file paths]).
 
-        # TODO:
-        #   1. Call `await self.markdown_loader.load_directory(source_dir)`.
-        #   2. Iterate `source_dir.rglob("*.pdf")` and call `await self.pdf_loader.load(path)`
-        #      for each, collecting failures in `failed_paths`.
-        #   3. Return (md_docs + pdf_docs, failed_paths).
         """
         failed_paths = []
         docs = []

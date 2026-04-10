@@ -1,0 +1,105 @@
+# =============================================================================
+# FILE: customer_support_rag/docker-compose.yml
+#
+# Services:
+#   chroma  — ChromaDB vector database (port 8001, persisted volume)
+#   api     — FastAPI backend (port 8000)
+#   ui      — Streamlit frontend (port 8501)
+#
+# Usage:
+#   make docker-up    →  docker compose up --build -d
+#   make docker-down  →  docker compose down -v
+#   make docker-logs  →  docker compose logs -f
+# =============================================================================
+
+services:
+
+  # ── ChromaDB — vector database ─────────────────────────────────────────────
+  chroma:
+    image: chromadb/chroma:latest
+    container_name: rag_chroma
+    restart: unless-stopped
+    ports:
+      - "8001:8000"   # ChromaDB default internal port is 8000; we map to 8001
+    volumes:
+      - chroma_data:/chroma/chroma   # Persist vector embeddings across restarts
+    environment:
+      - IS_PERSISTENT=TRUE
+      - ANONYMIZED_TELEMETRY=FALSE
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+
+  # ── FastAPI backend ─────────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: rag_api
+    restart: unless-stopped
+    depends_on:
+      chroma:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env          # Load secrets from .env (never committed to VCS)
+    environment:
+      # Override any localhost references with Docker service names
+      - CHROMA_HOST=chroma
+      - CHROMA_PORT=8000    # Internal ChromaDB port inside Docker network
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+      - LOG_FORMAT=json     # Structured JSON logs in production
+      - LOG_LEVEL=INFO
+    volumes:
+      - ./data:/app/data    # Mount local data/docs for ingestion
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+
+  # ── Streamlit UI ────────────────────────────────────────────────────────────
+  ui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: rag_ui
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    environment:
+      # UI calls the API via Docker service name, NOT localhost
+      - API_BASE_URL=http://api:8000
+      - STREAMLIT_SERVER_PORT=8501
+      - STREAMLIT_SERVER_ADDRESS=0.0.0.0
+      - LOG_FORMAT=json
+    command: >
+      streamlit run ui/app.py
+      --server.port=8501
+      --server.address=0.0.0.0
+      --server.headless=true
+      --browser.gatherUsageStats=false
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 40s
+      retries: 3
+
+# ── Named volumes ─────────────────────────────────────────────────────────────
+volumes:
+  chroma_data:
+    driver: local

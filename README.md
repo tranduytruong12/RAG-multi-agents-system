@@ -9,10 +9,10 @@ User Query (POST /chat)
         │
         ▼
 ┌──────────────────────────────────────────────────────────────┐
-│                     OrchestratorAgent (LangGraph DAG)         │
+│           OrchestratorAgent (LangGraph Cyclic Graph)         │
 │                                                              │
 │  ┌─────────────┐    ┌────────────┐    ┌────────────────────┐ │
-│  │  Intent     │───▶│  Retriever │───▶│   DraftWriter      │ │
+│  │  Intent     │───▶│  Retriever │──▶│   DraftWriter      │ │
 │  │  Classifier │    │  Agent     │    │   Agent (GPT-4o)   │ │
 │  └─────────────┘    └────────────┘    └────────────────────┘ │
 │                                                  │           │
@@ -23,10 +23,10 @@ User Query (POST /chat)
 │                                        └──────────────────┘  │
 │                                                  │           │
 │                              ┌───────────────────┴─────────┐ │
-│                              │  passed?                     │ │
-│                         YES──┤                     NO (retry│ │
-│                              │         or Human Review)     │ │
-│                              └──────────────────────────────┘ │
+│                              │  passed?                    │ │
+│                         YES──┤                   NO (retry │ │
+│                              │         or Human Review)    │ │
+│                              └─────────────────────────────┘ │
 └──────────────────────────────────────────────────────────────┘
         │
         ▼
@@ -79,7 +79,7 @@ customer_support_rag/
 │   └── ranker.py           # Re-ranking / relevance scoring
 │
 ├── agents/                 # Phase 2
-│   ├── orchestrator.py     # LangGraph StateGraph DAG
+│   ├── orchestrator.py     # LangGraph StateGraph
 │   ├── intent_classifier.py
 │   ├── drafter.py
 │   └── qa_agent.py
@@ -148,9 +148,21 @@ curl -X POST http://localhost:8000/chat \
 ## Docker (Full Stack)
 
 ```bash
-make docker-up    # Starts API + ChromaDB
-make docker-down  # Stops all services
+make docker-up   # Starts ChromaDB + API + Streamlit UI
+make docker-down # Stops all services and removes volumes
+make docker-logs # Tail all service logs
 ```
+
+> **Note:** Place your `.env` file (copied from `.env.example`) in the project root before running.
+> The `OPENAI_API_KEY` must be set. `CHROMA_HOST` is automatically overridden to `chroma`.
+
+**Services:**
+| Service | URL |
+|---------|-----|
+| FastAPI (backend) | http://localhost:8000 |
+| API Docs (Swagger) | http://localhost:8000/docs |
+| ChromaDB | http://localhost:8001 |
+| Streamlit UI | http://localhost:8501 |
 
 ---
 
@@ -189,9 +201,9 @@ See [`.env.example`](.env.example) for all configurable options.
 | Sprint 0 | SETUP | Environment bootstrap | ✅ Done |
 | Sprint 1 | RAG | Ingestion pipeline implementation | ✅ Done |
 | Sprint 2 | RAG | Retrieval & vector search | ✅ Done |
-| Sprint 3 | MULTI-AGENT | Multi-agent DAG (LangGraph) | ✅ Done |
+| Sprint 3 | MULTI-AGENT | Multi-agent Cyclic Graph (LangGraph) | ✅ Done |
 | Sprint 4 | BACK-END | API, HITL & test suite | ✅ Done |
-| Sprint 5 | HARDENING | Docker, retry logic & polish | 🔲 Pending |
+| Sprint 5 | HARDENING | Docker, retry logic & polish | ✅ Done |
 
 ---
 
@@ -305,7 +317,7 @@ pytest tests/test_retriever.py -v   # all pass
 
 ---
 
-### ✅ Sprint 3 — Multi-Agent DAG *(Week 3 — Prompt 3A)*
+### ✅ Sprint 3 — Multi-Agent *(Week 3 — Prompt 3A)*
 
 **Goal:** Build the full LangGraph state machine. All 4 agents implemented and connected. QA retry loop working.
 
@@ -406,21 +418,21 @@ make test
 #### Tasks
 
 **Containerization**
-- [ ] Write multi-stage `Dockerfile` (`builder` → `runtime` slim image)
-- [ ] Write `docker-compose.yml` with `app`, `chroma` services
-- [ ] Add health checks to compose services
-- [ ] Test `make docker-up` end-to-end
+- [x] Write multi-stage `Dockerfile` (`builder` → `runtime` slim image)
+- [x] Write `docker-compose.yml` with `app`, `chroma`, `ui` services
+- [x] Add health checks to compose services
+- [x] Test `make docker-up` end-to-end
 
 **Hardening**
-- [ ] Add `tenacity` retry wrappers to all LLM calls (`stop_after_attempt(3)`, `wait_exponential`)
-- [ ] Add `tenacity` retry to ChromaDB connect in `VectorStoreManager`
-- [ ] Set `LOG_FORMAT=json` in Docker compose — verify structured JSON output
-- [ ] Add `request_id` to all API responses in response headers
+- [x] Add `tenacity` retry wrappers to all LLM calls (`stop_after_attempt(3)`, `wait_exponential`)
+- [x] Add `tenacity` retry to ChromaDB connect in `VectorStoreManager` (5 attempts, 2-30s backoff)
+- [x] Set `LOG_FORMAT=json` in Docker compose — verify structured JSON output
+- [x] Add `request_id` to all API responses in response headers (`X-Request-ID`)
 
 **Final Validation**
-- [ ] All 6 test files pass with >80% coverage
-- [ ] `docker compose up --build` works from a clean checkout
-- [ ] End-to-end test: POST /ingest → POST /chat → meaningful reply
+- [x] All 6 test files pass with >80% coverage
+- [x] `docker compose up --build` works from a clean checkout
+- [x] End-to-end test: POST /ingest → POST /chat → meaningful reply
 
 #### 🏁 Milestone — Sprint 5 (PROJECT COMPLETE) When:
 ```bash
@@ -459,7 +471,7 @@ make docker-down
 Sprint 0 (scaffold)
     └── Sprint 1 (loaders + chunkers)
             └── Sprint 2 (embed + vector store + retriever)
-                    └── Sprint 3 (agents + LangGraph DAG)
+                    └── Sprint 3 (agents + Cyclic Graph)
                             └── Sprint 4 (API + HITL + tests)
                                     └── Sprint 5 (Docker + hardening)
 ```

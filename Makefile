@@ -1,5 +1,5 @@
 # FILE: customer_support_rag/Makefile
-.PHONY: install dev test lint format type-check ingest docker-up docker-down clean help
+.PHONY: install dev ui test lint format type-check ingest docker-build docker-up docker-down docker-logs clean help
 
 # ── Default ──────────────────────────────────────────────────────────────────
 help:
@@ -9,13 +9,16 @@ help:
 	@echo "Available targets:"
 	@echo "  install       Install all dependencies via Poetry"
 	@echo "  dev           Start FastAPI dev server with hot reload"
+	@echo "  ui            Start Streamlit UI (port 8501)"
 	@echo "  test          Run full test suite with coverage"
 	@echo "  lint          Run ruff linter"
 	@echo "  format        Auto-format code with ruff"
 	@echo "  type-check    Run mypy type checker"
 	@echo "  ingest        Run ingestion pipeline on ./data/docs/"
+	@echo "  docker-build  Build Docker images without starting"
 	@echo "  docker-up     Start all services via Docker Compose"
 	@echo "  docker-down   Stop all Docker services"
+	@echo "  docker-logs   Tail all Docker service logs"
 	@echo "  clean         Remove __pycache__, .pytest_cache, htmlcov"
 
 # ── Setup ─────────────────────────────────────────────────────────────────────
@@ -27,6 +30,9 @@ install:
 # ── Development ───────────────────────────────────────────────────────────────
 dev:
 	poetry run uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
+
+ui:
+	poetry run streamlit run ui/app.py --server.port 8501 --server.address 0.0.0.0
 
 # ── Testing ───────────────────────────────────────────────────────────────────
 test:
@@ -60,12 +66,22 @@ asyncio.run(main())
 "
 
 # ── Docker ────────────────────────────────────────────────────────────────────
+docker-build:
+	docker compose build
+
 docker-up:
 	docker compose up --build -d
-	@echo "✅ Services started. API: http://localhost:8000  ChromaDB: http://localhost:8001"
+	@echo "✅ Services started."
+	@echo "   API:      http://localhost:8000"
+	@echo "   API docs: http://localhost:8000/docs"
+	@echo "   ChromaDB: http://localhost:8001"
+	@echo "   UI:       http://localhost:8501"
 
 docker-down:
 	docker compose down -v
+
+docker-logs:
+	docker compose logs -f
 
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 clean:

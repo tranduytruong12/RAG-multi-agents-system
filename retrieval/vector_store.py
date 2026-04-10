@@ -20,11 +20,20 @@ from llama_index.core import StorageContext, VectorStoreIndex
 from llama_index.core.schema import TextNode
 from llama_index.vector_stores.chroma import ChromaVectorStore
 from llama_index.embeddings.openai import OpenAIEmbedding
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    before_sleep_log,
+    RetryError,
+)
+import logging
 from config.settings import settings
 from core.exceptions import RAGBaseException
 from core.logging import get_logger
 
 logger = get_logger(__name__)
+_stdlib_logger = logging.getLogger(__name__)
 
 
 class VectorStoreError(RAGBaseException):
@@ -68,36 +77,27 @@ class VectorStoreManager:
         chromadb client calls in ``asyncio.to_thread`` to keep the event
         loop unblocked.
 
+        Retries up to 5 times with exponential back-off (2 s → 30 s). This
+        handles Docker Compose startup races where the ChromaDB container is
+        healthy but not yet accepting connections when the API container starts.
+
         Raises:
-            VectorStoreError: If the ChromaDB server is unreachable or
-                the collection cannot be created.
+            VectorStoreError: If the ChromaDB server is unreachable after all
+                retries or the collection cannot be created.
         """
         try:
-            self._client = await asyncio.to_thread(
-                chromadb.HttpClient,
-                host=settings.chroma_host,
-                port=settings.chroma_port,
-            )
-
-            self._collection = await asyncio.to_thread(
-                self._client.get_or_create_collection,
-                name=settings.chroma_collection_name,
-            )
-
-            self._vector_store = ChromaVectorStore(
-                chroma_collection=self._collection,
-            )
-
-            self._storage_context = StorageContext.from_defaults(
-                vector_store=self._vector_store,
-            )
-
-            logger.info(
-                "chroma_connected",
-                host=settings.chroma_host,
-                port=settings.chroma_port,
-                collection=settings.chroma_collection_name,
-            )
+            await self._connect_with_retry()
+        except RetryError as e:
+            raise VectorStoreError(
+                f"ChromaDB unreachable after retries at "
+                f"{settings.chroma_host}:{settings.chroma_port}",
+                context={
+                    "host": settings.chroma_host,
+                    "port": settings.chroma_port,
+                    "collection": settings.chroma_collection_name,
+                    "original_error": str(e),
+                },
+            ) from e
         except Exception as e:
             raise VectorStoreError(
                 f"Failed to connect to ChromaDB at {settings.chroma_host}:{settings.chroma_port}",
@@ -108,6 +108,40 @@ class VectorStoreManager:
                     "original_error": str(e),
                 },
             ) from e
+
+    @retry(
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=1, min=2, max=30),
+        before_sleep=before_sleep_log(_stdlib_logger, logging.WARNING),
+        reraise=True,
+    )
+    async def _connect_with_retry(self) -> None:
+        """Inner connect logic with tenacity retry — called by connect()."""
+        self._client = await asyncio.to_thread(
+            chromadb.HttpClient,
+            host=settings.chroma_host,
+            port=settings.chroma_port,
+        )
+
+        self._collection = await asyncio.to_thread(
+            self._client.get_or_create_collection,
+            name=settings.chroma_collection_name,
+        )
+
+        self._vector_store = ChromaVectorStore(
+            chroma_collection=self._collection,
+        )
+
+        self._storage_context = StorageContext.from_defaults(
+            vector_store=self._vector_store,
+        )
+
+        logger.info(
+            "chroma_connected",
+            host=settings.chroma_host,
+            port=settings.chroma_port,
+            collection=settings.chroma_collection_name,
+        )
 
     async def add_nodes(self, nodes: Sequence[TextNode]) -> None:
         """Embed and upsert a list of LlamaIndex TextNodes into ChromaDB.

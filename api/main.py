@@ -16,6 +16,7 @@ Or via Makefile:
 
 from __future__ import annotations
 
+import uuid
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
@@ -23,6 +24,8 @@ import structlog
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
 
 from core.exceptions import APIError
 from core.logging import configure_logging, get_logger
@@ -78,6 +81,25 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # ── X-Request-ID middleware ───────────────────────────────────────────────
+    # Generates a unique request ID for each request (or reuses the client's
+    # X-Request-ID header if provided). Binds it to the structlog context so it
+    # appears in every log line, and returns it in the response headers for
+    # end-to-end tracing across services.
+    class RequestIdMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request: Request, call_next) -> Response:  # type: ignore[override]
+            request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+            # Bind to structlog context for the duration of this request
+            structlog.contextvars.bind_contextvars(request_id=request_id)
+            try:
+                response: Response = await call_next(request)
+            finally:
+                structlog.contextvars.unbind_contextvars("request_id")
+            response.headers["X-Request-ID"] = request_id
+            return response
+
+    app.add_middleware(RequestIdMiddleware)
 
     # ── Global exception handler ──────────────────────────────────────────────
     @app.exception_handler(APIError)

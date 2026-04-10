@@ -27,7 +27,7 @@ services:
       - IS_PERSISTENT=TRUE
       - ANONYMIZED_TELEMETRY=FALSE
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/8000 && echo -e \"GET /api/v2/heartbeat HTTP/1.0\r\n\r\n\" >&3 && timeout 2 cat <&3 | grep -q 200'"]
       interval: 15s
       timeout: 5s
       start_period: 20s

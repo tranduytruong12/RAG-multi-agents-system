@@ -180,7 +180,17 @@ class OrchestratorAgent:
 
         This is the ONLY node that may call LlamaIndex code (via HybridRetriever).
         All other nodes must NOT import LlamaIndex symbols.
+
+        build_index() is called lazily on the first request so the expensive
+        ChromaDB connection and BM25 index construction only happen once per
+        OrchestratorAgent instance lifetime.
         """
+        # Lazy initialization: build the fusion index only on the first call.
+        if self._retriever._fusion_retriever is None:
+            logger.info("orchestrator.retriever.build_index.start")
+            await self._retriever.build_index()
+            logger.info("orchestrator.retriever.build_index.done")
+
         start = time.monotonic()
         results = await self._retriever.retrieve(state["user_query"], top_k=5)
         latency_ms = (time.monotonic() - start) * 1000
@@ -290,36 +300,28 @@ class OrchestratorAgent:
     # ── Conditional routing ────────────────────────────────────────────────────
 
     def _route_after_qa(self, state: SupportState) -> _RouteAfterQA:
-        """Determine the next node after qa_check based on QA result and retry count.
-
-        This function is passed to `builder.add_conditional_edges`. LangGraph
-        calls it with the current state after qa_check executes, and routes to
-        the node whose name matches the returned string.
-
-        Routing logic:
-            1. If requires_human_review → "human_review"  (HITL pause)
-            2. If qa_verdict.passed     → "finalize"       (happy path)
-            3. If retry_count < max     → "draft_reply"    (retry loop)
-            4. Otherwise                → "escalate"       (max retries exceeded)
-
-        Returns:
-            One of: "finalize" | "draft_reply" | "escalate" | "human_review"
-        """
+        """Determine the next node after qa_check based on QA result and retry count."""
         verdict_dict = state.get("qa_verdict", {})
-        verdict = QAVerdict(**verdict_dict)
-        
+
+        # Safety guard: if qa_verdict is empty or malformed, treat as failed.
+        if not verdict_dict or "passed" not in verdict_dict:
+            logger.warning("orchestrator.route_after_qa.empty_verdict — defaulting to retry/escalate")
+            verdict = QAVerdict(passed=False)
+        else:
+            verdict = QAVerdict(**verdict_dict)
+
         # Nếu cờ này vẫn là True (chưa bị xóa ở qa_check), route thẳng ra END
         if state.get("requires_human_review"):
             return "human_review"
-            
+
         if verdict.passed:
             return "finalize"
-            
+
         # Ưu tiên quay về draft_reply nếu có feedback từ người dùng, bỏ qua retry_count
         if state.get("human_feedback"):
             return "draft_reply"
-            
+
         if state.get("retry_count", 0) < settings.agent_max_retries:
             return "draft_reply"
-            
+
         return "escalate"

@@ -51,6 +51,15 @@ def get_orchestrator() -> OrchestratorAgent:
     return _orchestrator
 
 
+def get_retriever():
+    """Return the HybridRetriever from the shared orchestrator singleton.
+
+    Used by the ingest route to invalidate the cached index after a collection
+    reset, so the next chat request rebuilds against the new collection.
+    """
+    return get_orchestrator()._retriever
+
+
 # ── Request / Response models ──────────────────────────────────────────────────
 
 class ChatRequest(BaseModel):
@@ -158,6 +167,7 @@ async def chat(request: ChatRequest) -> JSONResponse:
         "final_reply": "",
         "retry_count": 0,
         "metadata": request.metadata,
+        "qa_verdict": {},
         "requires_human_review": False,
         "human_feedback": None,
         "messages": [],

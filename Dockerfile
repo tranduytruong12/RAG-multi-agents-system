@@ -44,7 +44,8 @@ RUN poetry export \
 # Install into an isolated virtualenv inside /opt/venv
 RUN python -m venv /opt/venv \
     && /opt/venv/bin/pip install --upgrade pip \
-    && /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
+    && /opt/venv/bin/pip install --no-cache-dir -r requirements.txt \
+    && /opt/venv/bin/pip install --no-cache-dir llama-index-llms-openai
 
 
 # ── Stage 2: runtime ──────────────────────────────────────────────────────────

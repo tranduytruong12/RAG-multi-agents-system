@@ -119,7 +119,26 @@ class Settings(BaseSettings):
 
     # ── FastAPI ───────────────────────────────────────────────────────────────
     api_host: str = Field(default="0.0.0.0", description="API server bind host.")
-    api_port: int = Field(default=8000, gt=0, description="API server bind port.")
+    api_port: int = Field(default=8000, gt=0, description="API server bind port. Default 8000 — no conflict with ChromaDB (8001) or Streamlit (8501).")
+    cors_origins: str = Field(
+        default="*",
+        description="Comma-separated allowed CORS origins. Use '*' for dev, restrict in prod (e.g. 'http://localhost:8501').",
+    )
+
+    # ── Streamlit UI ──────────────────────────────────────────────────────────
+    streamlit_server_port: int = Field(
+        default=8501,
+        gt=0,
+        description="Streamlit server port. Default 8501 — no conflict with API (8000) or ChromaDB (8001).",
+    )
+    streamlit_server_address: str = Field(
+        default="localhost",
+        description="Streamlit bind address.",
+    )
+    api_base_url: str = Field(
+        default="http://localhost:8000",
+        description="Full base URL of the FastAPI backend, used by the Streamlit UI to make HTTP calls.",
+    )
 
     # ── Logging ───────────────────────────────────────────────────────────────
     log_level: str = Field(

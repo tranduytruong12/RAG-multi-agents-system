@@ -65,6 +65,8 @@ class SupportState(TypedDict):
     final_reply: str
     retry_count: int
     metadata: dict
+    # QA verdict from QAAgent (serialised QAVerdict.model_dump())
+    qa_verdict: dict
     # Human-in-the-loop fields
     requires_human_review: bool
     human_feedback: str | None
@@ -112,6 +114,14 @@ class QAVerdict(BaseModel):
         ge=0.0,
         le=1.0,
         description="QA model confidence score. Lower scores may warrant human review.",
+    )
+    requires_human_review: bool = Field(
+        default=False,
+        description=(
+            "Set to True when the case is too complex, sensitive, or ambiguous for "
+            "automated handling. Examples: legal threats, billing disputes, "
+            "emotionally distressed customers, or confidence_score < 0.5."
+        ),
     )
 
 

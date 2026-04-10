@@ -52,6 +52,8 @@ Evaluate the draft reply against the following criteria and fill in the verdict:
 
 5. CONFIDENCE — Provide a float in [0, 1] for your confidence in this verdict.
 
+6. HUMAN REVIEW — Set requires_human_review=true if you are NOT confident (confidence < 0.7) or if the case is complex/sensitive.
+
 Populate the `issues` list with specific, actionable problems found (empty when passed=true).
 """
 
@@ -134,21 +136,33 @@ class QAAgent:
             raise AgentError("QA verification failed", context={"original_error": str(exc)})
 
         latency_ms = (time.monotonic() - start) * 1000
+
+        # ── TESTING MODE: force human review regardless of LLM verdict ──────────
+        # Remove this override when done testing HITL.
+        # requires_human_review = True  # noqa: F841  ← TESTING — revert to: verdict.requires_human_review
+        # ────────────────────────────────────────────────────────────────────────
+
         logger.info(
             "qa_agent.done",
             passed=verdict.passed,
             issues=verdict.issues,
             confidence=verdict.confidence_score,
+            requires_human_review=verdict.requires_human_review,
             latency_ms=round(latency_ms, 1),
         )
 
         return {
             "qa_verdict": verdict.model_dump(),
+            "requires_human_review": verdict.requires_human_review,
             "messages": [AgentAction(
                 agent_name="QAAgent",
                 action="verify_draft",
                 input_summary=f"draft length={len(draft_reply)}",
-                output_summary=f"passed={verdict.passed}, issues={len(verdict.issues)}",
+                output_summary=(
+                    f"passed={verdict.passed}, "
+                    f"human_review={verdict.requires_human_review}, "
+                    f"issues={len(verdict.issues)}"
+                ),
                 latency_ms=latency_ms,
                 success=True,
             ).model_dump()]

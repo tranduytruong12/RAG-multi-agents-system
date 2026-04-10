@@ -66,7 +66,7 @@ class IngestAcceptedResponse(BaseModel):
 
 # ── Background task ───────────────────────────────────────────────────────────
 
-async def _run_ingestion(job_id: str, source_dir: Path) -> None:
+async def _run_ingestion(job_id: str, source_dir: Path, reset_collection: bool) -> None:
     """Execute the IngestionPipeline and update the in-memory job store.
 
     This coroutine is registered as a FastAPI BackgroundTask and runs after
@@ -75,15 +75,26 @@ async def _run_ingestion(job_id: str, source_dir: Path) -> None:
     Args:
         job_id: The UUID string identifying this job in _jobs.
         source_dir: Root directory containing documents to ingest.
+        reset_collection: When True the ChromaDB collection is wiped before
+            ingestion (used for the default source_dir to prevent duplicates).
+            When False, new chunks are appended to the existing collection.
     """
     _jobs[job_id]["status"] = "running"
-    logger.info("ingest.job.started", job_id=job_id, source_dir=str(source_dir))
+    logger.info(
+        "ingest.job.started",
+        job_id=job_id,
+        source_dir=str(source_dir),
+        reset_collection=reset_collection,
+    )
 
     try:
         from ingestion.pipeline import IngestionPipeline
 
         pipeline = IngestionPipeline()
-        result: IngestionResult = await pipeline.run(source_dir)
+        result: IngestionResult = await pipeline.run(
+            source_dir,
+            reset_collection=reset_collection,
+        )
 
         _jobs[job_id]["status"] = "done"
         _jobs[job_id]["result"] = result.model_dump()
@@ -93,6 +104,17 @@ async def _run_ingestion(job_id: str, source_dir: Path) -> None:
             total_chunks=result.total_chunks,
             duration_s=result.duration_seconds,
         )
+
+        # Invalidate the retriever cache if the collection was reset so the
+        # next chat request rebuilds the index against the new collection UUID.
+        if reset_collection:
+            try:
+                from api.routes.chat import get_retriever
+                get_retriever().invalidate()
+                logger.info("ingest.retriever.invalidated", job_id=job_id)
+            except Exception as inv_exc:
+                # Non-fatal: orchestrator may not be initialized yet on first run.
+                logger.warning("ingest.retriever.invalidate.skipped", reason=str(inv_exc))
 
     except Exception as exc:
         _jobs[job_id]["status"] = "failed"
@@ -130,10 +152,29 @@ async def ingest(
     job_id = str(uuid.uuid4())
     source_dir = Path(request.source_dir)
 
-    _jobs[job_id] = {"status": "pending", "source_dir": str(source_dir)}
-    logger.info("ingest.job.accepted", job_id=job_id, source_dir=str(source_dir))
+    # ── Reset logic ────────────────────────────────────────────────────────────
+    # When the caller uses the default source directory (data/docs), we wipe the
+    # ChromaDB collection before re-ingesting so the same documents cannot be
+    # duplicated across multiple POST /ingest calls.
+    #
+    # When a custom source_dir is provided (e.g. from the Streamlit sidebar), we
+    # append nodes to the existing collection so previously ingested data is
+    # preserved and the new directory is merged in.
+    reset_collection: bool = (source_dir == _DEFAULT_SOURCE_DIR)
 
-    background_tasks.add_task(_run_ingestion, job_id, source_dir)
+    _jobs[job_id] = {
+        "status": "pending",
+        "source_dir": str(source_dir),
+        "reset_collection": reset_collection,
+    }
+    logger.info(
+        "ingest.job.accepted",
+        job_id=job_id,
+        source_dir=str(source_dir),
+        reset_collection=reset_collection,
+    )
+
+    background_tasks.add_task(_run_ingestion, job_id, source_dir, reset_collection)
 
     return IngestAcceptedResponse(job_id=job_id)
 

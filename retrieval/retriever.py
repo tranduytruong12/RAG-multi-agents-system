@@ -54,6 +54,26 @@ class HybridRetriever:
         self._index: Optional[VectorStoreIndex] = None
         self._fusion_retriever: Optional[QueryFusionRetriever] = None
 
+    def invalidate(self) -> None:
+        """Invalidate ALL cached state and replace the VectorStoreManager.
+
+        Creates a brand-new VectorStoreManager so that every internal cache
+        (ChromaDB client, collection reference, vector store wrapper, and index)
+        is discarded. The next ``retrieve()`` call will rebuild everything from
+        scratch against the current collection in ChromaDB.
+
+        This must be called after any operation that deletes and recreates the
+        ChromaDB collection (i.e. reset ingestion), because ChromaDB assigns a
+        new UUID to the recreated collection, making all previous references stale.
+        """
+        self._vector_store_manager = VectorStoreManager()   # fresh — no stale refs
+        self._index = None
+        self._fusion_retriever = None
+        logger.info(
+            "hybrid_retriever.invalidated",
+            reason="collection reset — VectorStoreManager replaced, will rebuild on next retrieve call",
+        )
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------

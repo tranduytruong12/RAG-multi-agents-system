@@ -1,0 +1,5 @@
+My Name is Tran Duy Truong, aka cat lover and I am a student at Ho Chi Minh University of Technology, a graduate in Computer Science aiming to become an AI/Automation Engineer. I have a solid foundation in Machine Learning and Deep Learning, and I’m actively building real-world projects.
+
+I’m working on advanced topics like EEG-based Brain–Computer Interfaces, recommendation systems, and RAG-based LLM applications. I also focus on system design and practical implementation, not just theory.
+
+Overall, I’m a mix of a builder and a researcher, with a clear goal of landing an AI/LLM-related internship—and I’m on the right track.

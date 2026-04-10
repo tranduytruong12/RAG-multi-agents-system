@@ -55,7 +55,7 @@ class IngestionPipeline:
         self.text_loader: TextLoader = TextLoader()
         self.chunker: SemanticChunker = SemanticChunker()
 
-    async def run(self, source_dir: Path) -> IngestionResult:
+    async def run(self, source_dir: Path, *, reset_collection: bool = False) -> IngestionResult:
         """Execute the full ingestion pipeline for all documents in source_dir.
 
         Discovers .md, .txt and .pdf files recursively under source_dir. Files that
@@ -65,6 +65,11 @@ class IngestionPipeline:
         Args:
             source_dir: Root directory containing source support documents.
                 Must exist and be readable.
+            reset_collection: If True, the ChromaDB collection is wiped and
+                recreated before ingestion begins. Use this when re-ingesting
+                the default source directory to avoid duplicate chunks.
+                If False (default), new nodes are appended to the existing
+                collection — safe for adding a supplemental source directory.
 
         Returns:
             IngestionResult with total counts and any individual file failures.
@@ -94,8 +99,24 @@ class IngestionPipeline:
         ]
         vector_store_manager = VectorStoreManager()
         await vector_store_manager.connect()
+
+        if reset_collection:
+            logger.info(
+                "collection_reset",
+                reason="default source_dir — wiping to prevent duplicates",
+            )
+            await vector_store_manager.delete_collection()
+
         await vector_store_manager.add_nodes(nodes)
         duration = time.monotonic() - start
+        logger.info(
+            "ingestion_complete",
+            total_docs=len(successful_docs),
+            total_chunks=len(chunks),
+            failures=len(failed_docs),
+            duration_s=round(duration, 3),
+            reset_collection=reset_collection,
+        )
         return IngestionResult(
             total_documents=len(successful_docs),
             total_chunks=len(chunks),
@@ -103,9 +124,6 @@ class IngestionPipeline:
             success=len(failed_docs) == 0,
             duration_seconds=round(duration, 3),
         )
-        logger.info("ingestion_complete",
-                    total_docs=len(successful_docs), total_chunks=len(chunks),
-                    failures=len(failed_docs), duration_s=duration)
 
     async def _load_all_documents(
         self,

@@ -13,6 +13,7 @@ import uuid
 from typing import Any
 
 import httpx
+import os
 import streamlit as st
 
 # ── Page config ──────────────────────────────────────────────────────────────
@@ -23,8 +24,8 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── Constants ────────────────────────────────────────────────────────────────
-API_BASE = "http://localhost:8000"
+# ── Constants ───────────────────────────────────────────────────────────────────
+API_BASE = os.getenv("API_BASE_URL", "http://localhost:8000")  # configurable via .env
 TIMEOUT  = 120.0   # seconds — LLM calls can be slow
 
 INTENT_META: dict[str, dict[str, str]] = {

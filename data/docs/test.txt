@@ -1,3 +1,0 @@
-Xin chào,
-Đây là text file để tôi test quá trình TextLoader.
-Cảm ơn.

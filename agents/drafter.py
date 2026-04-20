@@ -23,16 +23,21 @@ from core.types import AgentAction, SupportState
 
 logger: structlog.BoundLogger = get_logger(__name__)
 
-_SYSTEM_PROMPT = """You are a professional customer-support agent.
-Your goal is to write a clear, empathetic, and accurate reply to the customer.
+_SYSTEM_PROMPT = """You are a professional and empathetic customer-support expert.
+Your goal is to write a highly accurate, solution-focused reply to the customer.
 
-Guidelines:
-  - Ground your reply strictly in the provided context. Do not invent facts.
-  - Match the customer's intent (refund / technical / billing / general / escalate).
-  - Be polite, concise, and solution-focused.
-  - If the context does not contain enough information, say so honestly.
-  - Do NOT start with "Dear Customer" or generic openers — be natural.
-"""
+Strict Guardrails (CRITICAL):
+1. NO HALLUCINATION: You MUST ground your reply strictly in the provided "Context from knowledge base". 
+2. UNKNOWN INFORMATION: If the provided context does NOT contain the answer, or says "No relevant context found", do NOT invent facts. Apologize honestly and state that you will forward their query to a human specialist.
+3. NO CLICHÉS: Do NOT start with "Dear Customer", "I hope this email finds you well", or other generic corporate openers. Be conversational and direct.
+
+Tone & Formatting Guidelines based on Intent:
+- If intent is "technical": Use bullet points or numbered lists to explain steps clearly.
+- If intent is "billing": Be precise with terms. Break down explanations logically.
+- If intent is "escalate": Adopt a highly empathetic, apologetic, and urgent tone. Reassure them that their issue is being prioritized.
+- If intent is "refund": Be clear about policies and timeframes mentioned in the context.
+
+Format your response in plain text (or markdown for bullet points) suitable for a chat or email interface."""
 
 _BASE_HUMAN_TEMPLATE = """Context from knowledge base:
 {context}
@@ -60,7 +65,7 @@ class DraftWriterAgent:
     def __init__(self) -> None:
         self._llm: ChatOpenAI = ChatOpenAI(
             model=settings.llm_model_name,
-            temperature=settings.llm_temperature,
+            temperature=0.2, # drafter need some creativity to generate a good reply
             api_key=settings.openai_api_key,
         )
 

@@ -214,6 +214,50 @@ class IngestionResult(BaseModel):
     success: bool
     duration_seconds: float
 
+#  ── Evaluation Types ───────────────────────────────────────────────────────────
+
+@dataclass
+class EvalSample:
+    """One row in the evaluation dataset.
+
+    Attributes:
+        question:          The customer question fed to the system.
+        ground_truth:      The expected / reference answer.
+        ground_truth_contexts:  The ideal document chunks that should be
+            retrieved to answer the question.  Used for context_recall and
+            context_entity_recall.
+        expected_intent:   Optional. The intent label we expect the classifier
+            to produce (one of VALID_INTENTS).
+        metadata:          Arbitrary tags for filtering / bucketing results.
+    """
+
+    question: str
+    ground_truth: str
+    expected_answer_points: list[str] = field(default_factory=list)
+    ground_truth_contexts: list[str] = field(default_factory=list)
+    expected_intent: str | None = None
+    metadata: dict[str, any] = field(default_factory=dict)
+
+
+@dataclass
+class EvalRow:
+    """Intermediate row produced after running the system on one EvalSample.
+
+    This acts as a bridge between the OrchestratorAgent output and the
+    RAGAS Dataset format.
+    """
+
+    question: str
+    answer: str                    # system's final_reply
+    contexts: list[str]            # retrieved_context from SupportState
+    ground_truth: str
+    ground_truth_contexts: list[str]
+    intent: str
+    expected_intent: str | None    # to compute intent accuracy properly
+    retry_count: int               # number of retries the orchestrator took
+    session_id: str
+    langsmith_run_id: str | None = None
+
 
 # ── Intent Label ──────────────────────────────────────────────────────────────
 

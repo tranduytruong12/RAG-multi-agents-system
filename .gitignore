@@ -67,3 +67,5 @@ vector_store/
 storage/
 *.db
 *.sqlite3
+local_chroma_data/
+evaluation/results/

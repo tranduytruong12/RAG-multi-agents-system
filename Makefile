@@ -34,6 +34,8 @@ dev:
 ui:
 	poetry run streamlit run ui/app.py --server.port 8501 --server.address 0.0.0.0
 
+db:
+	poetry run chromadb run --host localhost --port 8001
 # ── Testing ───────────────────────────────────────────────────────────────────
 test:
 	poetry run pytest tests/ -v --cov=. --cov-report=term-missing --cov-report=html

@@ -22,7 +22,7 @@ python = "^3.12"
 llama-index-core = ">=0.10"
 llama-index-vector-stores-chroma = ">=0.1"
 llama-index-embeddings-openai = ">=0.1"
-llama-index-llms-openai = ">=0.1"          # Required by LlamaIndex internals at runtime
+llama-index-llms-openai = "^0.1.0"
 llama-index-readers-file = ">=0.1"
 llama-index-retrievers-bm25 = ">=0.1"
 # ── LangGraph & LangChain (Agent Orchestration) ────────────────────────────
@@ -31,7 +31,7 @@ langchain-core = ">=0.2"
 langchain-openai = ">=0.1"
 
 # ── Vector Store ────────────────────────────────────────────────────────────
-chromadb = ">=0.5"
+chromadb = "0.5.3"
 
 # ── Reranking ───────────────────────────────────────────────────────────────
 cohere = ">=5.5"                             # Cohere Rerank API
@@ -46,6 +46,11 @@ ollama = ">=0.2"                         # Future expansion — Ollama local LLM
 # ── Data Validation & Config ────────────────────────────────────────────────
 pydantic = ">=2.7"
 pydantic-settings = ">=2.3"
+
+# ── Evaluation ────────────────────────────────────────────────
+ragas = ">=0.1.0"
+langsmith = ">=0.2.0"
+datasets = ">=2.0"
 
 # ── Structured Logging ─────────────────────────────────────────────────────
 structlog = ">=24.0"

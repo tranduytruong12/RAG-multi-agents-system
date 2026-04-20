@@ -4,7 +4,8 @@
 Responsibility:
     Build and compile the LangGraph StateGraph. Define nodes (each mapped to
     an agent method), define edges (including conditional routing logic), and
-    expose a single `run(state)` coroutine as the public entry point.
+    expose `run(state)` and `resume(session_id, human_feedback)` as the public
+    entry points.
 
 Control flow (cyclic graph):
     classify_intent
@@ -41,8 +42,9 @@ from typing import Literal
 
 import structlog
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.errors import GraphInterrupt
 from langgraph.graph import END, START, StateGraph
-from langgraph.types import interrupt
+from langgraph.types import Command, interrupt
 
 from config.settings import settings
 from core.exceptions import HumanReviewRequired, QAFailureError
@@ -58,7 +60,7 @@ logger: structlog.BoundLogger = get_logger(__name__)
 
 
 # ── Node return-type aliases (for conditional edge routing) ────────────────────
-_RouteAfterQA = Literal["draft_reply", "finalize", "escalate", "human_review"]
+_RouteAfterQA = Literal["draft_reply", "finalize", "escalate"]
 
 
 class OrchestratorAgent:
@@ -93,6 +95,10 @@ class OrchestratorAgent:
         Creates a LangGraph config dict with the session_id as the thread_id so
         MemorySaver can checkpoint conversation state per session.
 
+        `ainvoke()`returns the state dict with a special `__interrupt__` key
+        containing a tuple of Interrupt objects. This method detects that key
+        and re-raises GraphInterrupt so callers (chat.py) can handle HITL uniformly.
+
         Args:
             initial_state: Fully populated SupportState dict (all required keys set).
                 At minimum, `user_query` and `session_id` must be non-empty.
@@ -103,7 +109,8 @@ class OrchestratorAgent:
             final_reply, retry_count, messages, etc.
 
         Raises:
-            HumanReviewRequired: If the graph pauses for HITL review.
+            GraphInterrupt: If the graph pauses at an interrupt() call (HITL).
+                Callers must catch this and redirect the user to POST /chat/resume.
             QAFailureError: If QA fails after max retries and escalation logic raises.
             AgentError: For any unrecoverable sub-agent failure.
         """
@@ -115,7 +122,13 @@ class OrchestratorAgent:
             query_preview=initial_state["user_query"][:80],
         )
 
-        final_state: SupportState = await self._graph.ainvoke(initial_state, config=config)
+        result: dict = await self._graph.ainvoke(initial_state, config=config)
+
+        # interrupt() does NOT raise — it embeds __interrupt__
+        # in the return dict. Detect it and re-raise so chat.py catches it.
+        self._raise_if_interrupted(result, initial_state["session_id"])
+
+        final_state: SupportState = result  # type: ignore[assignment]
 
         logger.info(
             "orchestrator.run.done",
@@ -125,6 +138,88 @@ class OrchestratorAgent:
         )
 
         return final_state
+
+    async def resume(self, session_id: str, human_feedback: str) -> SupportState:
+        """Resume a graph that was paused by a HITL interrupt().
+
+        LangGraph stores the checkpoint under `session_id` (as thread_id) in
+        MemorySaver. This method re-invokes the graph with Command(resume=...),
+        which injects `human_feedback` as the return value of the `interrupt()`
+        call that originally paused the graph.
+
+        The node re-executes from the top (LangGraph v1.x behaviour). The second
+        call to interrupt() inside _node_qa_check will return `human_feedback`
+        immediately instead of pausing again.
+
+        Args:
+            session_id: Must match the session_id used in the original run() call
+                so MemorySaver locates the correct checkpoint.
+            human_feedback: Free-text reviewer comment. Pass an empty string to
+                approve the current draft without changes.
+
+        Returns:
+            The final SupportState after the resumed graph reaches END.
+
+        Raises:
+            GraphInterrupt: If a second interrupt() is hit (e.g. another HITL cycle
+                was triggered). Callers should handle this the same way as in run().
+            KeyError: If `session_id` has no checkpoint (e.g. session expired or
+                never started).
+        """
+        config: dict = {"configurable": {"thread_id": session_id}}
+
+        logger.info(
+            "orchestrator.resume.start",
+            session_id=session_id,
+            has_feedback=bool(human_feedback),
+        )
+
+        result: dict = await self._graph.ainvoke(
+            Command(resume=human_feedback),
+            config=config,
+        )
+
+        final_state: SupportState = result  # type: ignore[assignment]
+
+        logger.info(
+            "orchestrator.resume.done",
+            session_id=session_id,
+            intent=final_state.get("intent"),
+            retry_count=final_state.get("retry_count"),
+        )
+
+        return final_state
+
+    # ── Private helpers ────────────────────────────────────────────────────────
+
+    def _raise_if_interrupted(self, result: dict, session_id: str) -> None:
+        """Re-raise GraphInterrupt if LangGraph v1.x embedded one in the result.
+
+        In LangGraph >= 1.0, `ainvoke()` no longer raises GraphInterrupt directly.
+        Instead, when a node calls interrupt(), the graph returns early with a
+        synthetic `__interrupt__` key in the returned dict. This helper detects
+        that key and re-raises GraphInterrupt so our callers (chat.py) can catch
+        it in a single uniform `except GraphInterrupt` block.
+
+        Args:
+            result: The raw dict returned by ainvoke().
+            session_id: Used for structured log context only.
+
+        Raises:
+            GraphInterrupt: If `__interrupt__` is present in `result`.
+        """
+        interrupts = result.get("__interrupt__")
+        if not interrupts:
+            return
+
+        logger.info(
+            "orchestrator.hitl.interrupt_detected",
+            session_id=session_id,
+            interrupt_count=len(interrupts),
+        )
+        # Re-raise with the same args structure chat.py already expects:
+        # exc.args[0] is a tuple/list of Interrupt objects with a .value attribute.
+        raise GraphInterrupt(tuple(interrupts))
 
     # ── Graph construction ─────────────────────────────────────────────────────
 
@@ -153,14 +248,13 @@ class OrchestratorAgent:
 
         # Mapping:
         #   "finalize"     → "finalize"       (QA passed)
-        #   "draft_reply"  → "draft_reply"    (retry: QA failed, retry_count < max)
+        #   "draft_reply"  → "draft_reply"    (QA failed, retry_count < max)
         #   "escalate"     → "escalate"       (QA failed, retry_count >= max)
-        #   "human_review" → END              (HITL: LangGraph interrupt handle)
         builder.add_conditional_edges(
             "qa_check",
             self._route_after_qa,
             {"finalize": "finalize", "draft_reply": "draft_reply",
-             "escalate": "escalate", "human_review": END},
+             "escalate": "escalate"},
         )
 
         checkpointer = MemorySaver()
@@ -218,35 +312,48 @@ class OrchestratorAgent:
     async def _node_qa_check(self, state: SupportState) -> dict:
         """Node 4 — Run QAAgent, handle HITL interrupt, increment retry_count.
 
+        LangGraph v1.x resume behaviour: when the graph is resumed with
+        Command(resume=...) after an interrupt(), this entire node is re-executed
+        from the top. The second call to interrupt() will return the human's value
+        immediately (no pause). To avoid a redundant LLM call on resume, we check
+        whether the state already has a human_feedback value set by a prior cycle
+        before calling the QA LLM again.
+
         Reads `requires_human_review` from the QA result (not from the incoming
         state) because QAAgent is the one that sets this flag in its return dict.
-        Using `state` here would read the stale pre-QA value.
         """
         result = await self._qa_agent.verify(state)
         verdict_dict = result.get("qa_verdict", {})
         result["retry_count"] = state["retry_count"] + 1
 
-        # Read flag from the QA agent's output, not the stale incoming state.
+        # Read flag from the QA agent's fresh output, not the stale incoming state.
         if result.get("requires_human_review"):
-            # Pause execution and hand off to a human reviewer via LangGraph interrupt.
-            # `interrupt()` checkpoints state and pauses the graph until resumed.
+            # interrupt() on first call: raises GraphInterrupt (embedded in __interrupt__
+            # return key in LangGraph v1.x). On resume, returns human_feedback directly.
             human_feedback = interrupt({"reason": "human review required", "draft": state["draft_reply"]})
             result["human_feedback"] = human_feedback
 
-            # Clear the flag so routing does not loop back into human_review again
-            # after the graph is resumed with the human's input.
+            # Clear the flag so routing does not trigger another human review loop
+            # on the next QA cycle after the draft is re-generated.
             result["requires_human_review"] = False
 
             updated_verdict = dict(verdict_dict)
             if human_feedback:
-                # Human provided feedback → reject draft and request a new one
+                # Human provided feedback → reject draft, request a new one
                 updated_verdict["passed"] = False
-                updated_verdict["issues"] = ["Human reviewer requested changes"]
+                updated_verdict["issues"] = ["Human reviewer requested changes: " + human_feedback]
             else:
-                # Human approved with no comment → accept the draft
+                # Human approved (empty string) → accept draft as-is
                 updated_verdict["passed"] = True
                 updated_verdict["issues"] = []
             result["qa_verdict"] = updated_verdict
+
+            logger.info(
+                "orchestrator.hitl.feedback_received",
+                session_id=state["session_id"],
+                has_feedback=bool(human_feedback),
+                verdict_passed=updated_verdict["passed"],
+            )
 
         return result
 
@@ -310,14 +417,9 @@ class OrchestratorAgent:
         else:
             verdict = QAVerdict(**verdict_dict)
 
-        # Nếu cờ này vẫn là True (chưa bị xóa ở qa_check), route thẳng ra END
-        if state.get("requires_human_review"):
-            return "human_review"
-
         if verdict.passed:
             return "finalize"
 
-        # Ưu tiên quay về draft_reply nếu có feedback từ người dùng, bỏ qua retry_count
         if state.get("human_feedback"):
             return "draft_reply"
 

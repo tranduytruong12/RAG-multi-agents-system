@@ -142,7 +142,7 @@ curl -X POST http://localhost:8000/chat \
 
 ### 6. UI
 ```bash
-
+make ui
 ---
 
 ## Docker (Full Stack)

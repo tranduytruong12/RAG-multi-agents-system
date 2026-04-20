@@ -34,27 +34,24 @@ logger: structlog.BoundLogger = get_logger(__name__)
 # The LLM will evaluate the draft against these three dimensions.
 # with_structured_output forces the model to fill all QAVerdict fields.
 
-_SYSTEM_PROMPT = """You are a strict quality-assurance reviewer for customer-support replies.
+_SYSTEM_PROMPT = """You are a strict and unforgiving Quality Assurance (QA) reviewer for customer-support replies.
+Your job is to critically evaluate a draft reply strictly against the provided knowledge base context.
 
-Evaluate the draft reply against the following criteria and fill in the verdict:
+EVALUATION WORKFLOW (You must mentally process this before outputting JSON):
+1. TONE CHECK: Is the reply inappropriate, rude, robotic, or lacking empathy?
+   -> If yes, set `bad_tone` = true.
+2. ACCURACY CHECK: Does the draft invent facts, hallucinate, or contradict the provided context?
+   -> If yes (especially if context says "No relevant context found"), set `inaccurate` = true.
+3. POLICY CHECK: Does the draft omit critical policies or procedural steps explicitly mentioned in the context?
+   -> If yes, set `missing_policy_info` = true.
+4. ISSUE LOGGING: If any of the above checks are true, you MUST populate the `issues` list with exact quotes or specific reasons explaining what failed.
+   -> If ALL checks pass, `issues` MUST be an empty list.
+5. FINAL VERDICT: `passed` MUST be false if there is even a single issue. `passed` is true ONLY if the draft is flawless.
 
-1. TONE — Is the reply polite, empathetic, and professional?
-   Set bad_tone=true if the draft is rude, dismissive or overly robotic.
-
-2. ACCURACY — Does the draft contain only facts present in the provided context?
-   Set inaccurate=true if the draft invents information not in the context.
-
-3. POLICY COMPLETENESS — Does the draft include required policy/procedure details
-   that the context mentions but the draft omits?
-   Set missing_policy_info=true if critical policy info is absent.
-
-4. OVERALL — Set passed=true only if ALL three criteria pass.
-
-5. CONFIDENCE — Provide a float in [0, 1] for your confidence in this verdict.
-
-6. HUMAN REVIEW — Set requires_human_review=true if you are NOT confident (confidence < 0.7) or if the case is complex/sensitive.
-
-Populate the `issues` list with specific, actionable problems found (empty when passed=true).
+CRITICAL GUARDRAILS:
+- AVOID LENIENCY: Do not pass a draft just to be polite. Be highly critical.
+- CONFIDENCE: Assign a `confidence_score` (0.0 to 1.0). Lower it if the context is ambiguous or the user's query is highly complex.
+- HUMAN REVIEW: Only set `requires_human_review` = true if your confidence score is below 0.9 or if the case is extremely complex or sensitive.
 """
 
 _HUMAN_TEMPLATE = """Context from knowledge base:
@@ -122,7 +119,7 @@ class QAAgent:
         start = time.monotonic()
         draft_reply = state["draft_reply"]
         retrieved_context: list[str] = state["retrieved_context"]
-
+        retry_count = state.get("retry_count", 0)
         logger.info("qa_agent.start", draft_length=len(draft_reply))
 
         context_str = "\n\n---\n\n".join(retrieved_context) if retrieved_context \
@@ -130,6 +127,12 @@ class QAAgent:
 
         try:
             verdict: QAVerdict = await self._verify_with_retry(context_str, draft_reply)
+            
+            # Programmatically enforce when human review is allowed to avoid premature escalation.
+            # We want to allow the draft agent to self-correct automatically first.
+            if verdict.requires_human_review and retry_count != settings.agent_max_retries - 1:
+                logger.info("qa_agent.human_review_suppressed", retry_count=retry_count)
+                verdict.requires_human_review = False
 
         except Exception as exc:
             logger.error("qa_agent.error", error=str(exc))

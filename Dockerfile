@@ -33,20 +33,12 @@ WORKDIR /build
 # Copy dependency manifests first (better layer caching)
 COPY pyproject.toml poetry.lock* ./
 
-# Export production-only requirements to a plain requirements.txt so the
-# runtime stage can install with pip (no Poetry needed at runtime).
-RUN poetry export \
-        --without dev \
-        --without-hashes \
-        --format requirements.txt \
-        -o requirements.txt
-
-# Install into an isolated virtualenv inside /opt/venv
+# Install into an isolated virtualenv inside /opt/venv. 
+# We bypass poetry export entirely because it has a known bug with numpy version resolution.
 RUN python -m venv /opt/venv \
     && /opt/venv/bin/pip install --upgrade pip \
-    && /opt/venv/bin/pip install --no-cache-dir -r requirements.txt \
+    && VIRTUAL_ENV=/opt/venv /root/.local/bin/poetry install --without dev --no-root \
     && /opt/venv/bin/pip install --no-cache-dir llama-index-llms-openai
-
 
 # ── Stage 2: runtime ──────────────────────────────────────────────────────────
 FROM python:3.12-slim AS runtime
@@ -68,7 +60,7 @@ RUN groupadd --gid 1001 appgroup \
 WORKDIR /app
 
 # Copy pre-built virtualenv from builder stage
-COPY --from=builder /opt/venv /opt/venv
+COPY --from=builder --chown=appuser:appgroup /opt/venv /opt/venv
 
 # Copy application source (respects .dockerignore)
 COPY --chown=appuser:appgroup . .

@@ -16,7 +16,7 @@ services:
 
   # ── ChromaDB — vector database ─────────────────────────────────────────────
   chroma:
-    image: chromadb/chroma:latest
+    image: chromadb/chroma:0.5.3
     container_name: rag_chroma
     restart: unless-stopped
     ports:
@@ -27,7 +27,7 @@ services:
       - IS_PERSISTENT=TRUE
       - ANONYMIZED_TELEMETRY=FALSE
     healthcheck:
-      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/8000 && echo -e \"GET /api/v2/heartbeat HTTP/1.0\r\n\r\n\" >&3 && timeout 2 cat <&3 | grep -q 200'"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
       interval: 15s
       timeout: 5s
       start_period: 20s
@@ -56,6 +56,7 @@ services:
       - API_PORT=8000
       - LOG_FORMAT=json     # Structured JSON logs in production
       - LOG_LEVEL=INFO
+      - ANONYMIZED_TELEMETRY=FALSE
     volumes:
       - ./data:/app/data    # Mount local data/docs for ingestion
     healthcheck:

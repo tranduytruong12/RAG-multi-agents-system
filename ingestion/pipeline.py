@@ -129,7 +129,7 @@ class IngestionPipeline:
         self,
         source_dir: Path,
     ) -> tuple[list[Document], list[str]]:
-        """Load all MD and PDF documents from source_dir.
+        """Load all MD, TXT, and PDF documents from source_dir.
 
         Returns a tuple of (all_docs, failed_paths) where all_docs are
         successfully loaded Document objects and failed_paths are string
@@ -144,16 +144,29 @@ class IngestionPipeline:
         """
         failed_paths = []
         docs = []
-        try:
-            docs.extend(await self.markdown_loader.load_directory(source_dir))
-            docs.extend(await self.text_loader.load_directory(source_dir))
-        except LoaderError as e:
-            failed_paths.append(str(source_dir))
-            logger.error("loader_error", file_path=str(source_dir), error=str(e))
+
+        # Load Markdown files
+        for md_path in source_dir.rglob("*.md"):
+            try:
+                docs.extend(await self.markdown_loader.load(md_path))
+            except LoaderError as e:
+                failed_paths.append(str(md_path))
+                logger.error("loader_error", file_path=str(md_path), error=str(e))
+
+        # Load Text files
+        for txt_path in source_dir.rglob("*.txt"):
+            try:
+                docs.extend(await self.text_loader.load(txt_path))
+            except LoaderError as e:
+                failed_paths.append(str(txt_path))
+                logger.error("loader_error", file_path=str(txt_path), error=str(e))
+
+        # Load PDF files
         for pdf_path in source_dir.rglob("*.pdf"):
             try:
                 docs.extend(await self.pdf_loader.load(pdf_path))
             except LoaderError as e:
                 failed_paths.append(str(pdf_path))
                 logger.error("loader_error", file_path=str(pdf_path), error=str(e))
+
         return docs, failed_paths

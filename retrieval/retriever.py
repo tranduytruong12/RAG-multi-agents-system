@@ -114,6 +114,7 @@ class HybridRetriever:
                 nodes = list(self._index.docstore.docs.values())
             else:
                 nodes = await self._vector_store_manager.get_all_nodes()
+                logger.info(f"Total nodes in docstore: {len(nodes)}")
                 
             if not nodes:
                 raise RetrieverError("No documents found in docstore or ChromaDB. Cannot build BM25 retriever.")
@@ -208,15 +209,26 @@ class HybridRetriever:
             # 4. Sort by score descending (Explicit guarantee)
             results.sort(key=lambda r: r.score, reverse=True)
 
-            # 5. Log completion
+            # 5. Slice to top_k
+            top_results = results[:top_k]
+
+            # 6. Log completion
             logger.info(
                 "retrieval_complete",
                 query_preview=query[:60],
-                result_count=len(results)
+                result_count=len(top_results),
+                retrieved_contexts=[
+                    {
+                        "score": round(r.score, 4),
+                        "source": r.chunk.source_path,
+                        "content_preview": (r.chunk.content[:300] + "...") if len(r.chunk.content) > 300 else r.chunk.content
+                    }
+                    for r in top_results
+                ]
             )
 
-            # 6. Return results[:top_k]
-            return results[:top_k]
+            # 7. Return results
+            return top_results
 
         except Exception as e:
             logger.error(f"Retrieval execution failed: {e}")

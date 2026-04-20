@@ -1,0 +1,56 @@
+{
+  "dataset_name": "customer_support_rag_eval_dataset",
+  "version": "1.0",
+  "description": "Eval dataset for a customer support QA/RAG system covering intent classification, retrieval quality, answer grounding, ambiguity handling, and escalation behavior.",
+  "taxonomy": [
+    "refund",
+    "technical",
+    "billing",
+    "general",
+    "escalate"
+  ],
+  "samples": [
+    {
+      "id": "ex_001",
+      "question": "How do I request a refund for my order?",
+      "expected_intent": "refund",
+      "ground_truth": "You can request a refund within 30 days of purchase by contacting support with your order number.",
+      "ground_truth_contexts": [
+        "Refund Policy: Customers may request a refund within 30 days of the original purchase date by contacting our support team with their order number."
+      ],
+      "expected_answer_points": [
+        "Mentions the 30-day refund window",
+        "Asks for or mentions the order number",
+        "Explains that support should be contacted"
+      ],
+      "metadata": {
+        "category": "refund",
+        "difficulty": "easy",
+        "has_distractor": false,
+        "should_ask_clarification": false,
+        "must_escalate": false
+      }
+    },
+    {
+      "id": "ex_002",
+      "question": "I bought this last week. Can I still get my money back?",
+      "expected_intent": "refund",
+      "ground_truth": "If your purchase is within 30 days, you can request a refund by contacting support and providing your order number.",
+      "ground_truth_contexts": [
+        "Refund Policy: Customers may request a refund within 30 days of the original purchase date by contacting our support team with their order number."
+      ],
+      "expected_answer_points": [
+        "Maps 'last week' to refund eligibility window",
+        "States the 30-day policy",
+        "Requests the order number"
+      ],
+      "metadata": {
+        "category": "refund",
+        "difficulty": "medium",
+        "has_distractor": false,
+        "should_ask_clarification": false,
+        "must_escalate": false
+      }
+    }
+  ]
+}

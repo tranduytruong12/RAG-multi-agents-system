@@ -20,6 +20,7 @@ GET /health
 from __future__ import annotations
 
 import uuid
+from collections import deque
 from typing import Any
 
 import structlog
@@ -30,6 +31,8 @@ from langgraph.types import Command
 from pydantic import BaseModel, Field
 
 from agents.orchestrator import OrchestratorAgent
+from agents.query_rewriter import QueryRewriter
+from config.settings import settings
 from core.exceptions import APIError
 from core.logging import bind_request_context, get_logger
 from core.types import SupportState
@@ -38,9 +41,29 @@ logger: structlog.BoundLogger = get_logger(__name__)
 
 router = APIRouter(tags=["chat"])
 
-# Module-level singleton — built once, reused across requests.
-# In tests this is replaced via dependency override or direct monkeypatching.
+# ── Module-level singletons ────────────────────────────────────────────────────
+# Built once on first call and reused across requests.
+# In tests these are replaced via dependency override or direct monkeypatching.
 _orchestrator: OrchestratorAgent | None = None
+_query_rewriter: QueryRewriter | None = None
+
+# Session history store: maps session_id → deque of {query, reply} dicts.
+# deque(maxlen=N) automatically drops the oldest turn when N is exceeded,
+# implementing the sliding window without any manual pruning.
+# Example: _session_histories = {
+#     "session_123": deque([
+#         {"role": "user", "content": "Xin chào"},
+#         {"role": "assistant", "content": "Chào bạn! Mình có thể giúp gì?"},
+#         {"role": "user", "content": "Giải thích RAG là gì"},
+#         {"role": "assistant", "content": "RAG là viết tắt của Retrieval-Augmented Generation..."},
+#     ], maxlen=10),
+
+#     "session_456": deque([
+#         {"role": "user", "content": "What is machine learning?"},
+#         {"role": "assistant", "content": "Machine learning is a subset of AI..."},
+#     ], maxlen=10),
+# }
+_session_histories: dict[str, deque[dict[str, str]]] = {}
 
 
 def get_orchestrator() -> OrchestratorAgent:
@@ -49,6 +72,14 @@ def get_orchestrator() -> OrchestratorAgent:
     if _orchestrator is None:
         _orchestrator = OrchestratorAgent()
     return _orchestrator
+
+
+def get_query_rewriter() -> QueryRewriter:
+    """Return the shared QueryRewriter singleton, creating it on first call."""
+    global _query_rewriter  # noqa: PLW0603
+    if _query_rewriter is None:
+        _query_rewriter = QueryRewriter()
+    return _query_rewriter
 
 
 def get_retriever():
@@ -158,8 +189,33 @@ async def chat(request: ChatRequest) -> JSONResponse:
         query_preview=request.query[:80],
     )
 
+    # ── Short Window Query Rewriting ──────────────────────────────────────────
+    # Load the session's recent turn history (deque is created on first access).
+    history_deque = _session_histories.setdefault(
+        request.session_id,
+        deque(maxlen=settings.memory_window_size),
+    )
+    recent_turns: list[dict[str, str]] = list(history_deque)
+
+    # Attempt contextual rewriting only when the feature is enabled and there
+    # is at least one previous turn to provide context.
+    if settings.enable_query_rewriting and recent_turns:
+        rewriter = get_query_rewriter()
+        enriched_query, was_rewritten = await rewriter.rewrite(
+            request.query, recent_turns
+        )
+        if was_rewritten:
+            logger.info(
+                "chat.query_rewritten",
+                session_id=request.session_id,
+                original_query=request.query[:80],
+                rewritten_query=enriched_query[:80],
+            )
+    else:
+        enriched_query = request.query
+
     initial_state: SupportState = {
-        "user_query": request.query,
+        "user_query": enriched_query,      # pipeline sees the enriched query
         "session_id": request.session_id,
         "intent": "",
         "retrieved_context": [],
@@ -208,8 +264,20 @@ async def chat(request: ChatRequest) -> JSONResponse:
         retry_count=final_state.get("retry_count"),
     )
 
+    # ── Persist this turn into the session history ────────────────────────────
+    # Always store the **original** query (not the rewritten one) so the history
+    # reads naturally if inspected. Only save on HTTP 200 (graph fully complete).
+    # HITL-paused requests (HTTP 202) are NOT saved here — saved after /resume.
+    final_reply = final_state.get("final_reply", "")
+    history_deque.append({"query": request.query, "reply": final_reply})
+    logger.debug(
+        "chat.history.saved",
+        session_id=request.session_id,
+        history_size=len(history_deque),
+    )
+
     response = ChatResponse(
-        reply=final_state.get("final_reply", ""),
+        reply=final_reply,
         intent=final_state.get("intent", ""),
         session_id=request.session_id,
         retry_count=final_state.get("retry_count", 0),
@@ -250,7 +318,6 @@ async def resume_chat(request: ResumeRequest) -> JSONResponse:
         session_id=request.session_id,
         has_feedback=bool(request.human_feedback),
     )
-
     config = {"configurable": {"thread_id": request.session_id}}
 
     try:
@@ -284,6 +351,20 @@ async def resume_chat(request: ResumeRequest) -> JSONResponse:
         session_id=request.session_id,
         intent=final_state.get("intent"),
     )
+
+    # ── Persist the HITL-reviewed turn after successful resume ────────────────
+    # Now that the graph has completed after human review, save this exchange.
+    # We use "[hitl-reviewed]" as the query marker to distinguish it from normal
+    # turns, keeping the history readable while preserving reply context.
+    if request.session_id in _session_histories:
+        _session_histories[request.session_id].append(
+            {"query": final_state.get("user_query", ""), "reply": final_state.get("final_reply", "")}
+        )
+        logger.debug(
+            "chat.resume.history.saved",
+            session_id=request.session_id,
+            history_size=len(_session_histories[request.session_id]),
+        )
 
     response = ChatResponse(
         reply=final_state.get("final_reply", ""),

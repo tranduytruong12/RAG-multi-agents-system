@@ -96,41 +96,6 @@ class MarkdownLoader:
                 f"Failed to load markdown: {path}",
                 context={"file_path": str(path), "original_error": str(exc)},
             ) from exc
-        return []
-
-    async def load_directory(self, directory: Path) -> list[Document]:
-        """Load all Markdown files from a directory tree recursively.
-
-        Uses `rglob("*.md")` to discover every Markdown file under `directory`.
-        Files that fail individually are skipped and logged, so a single
-        corrupt file does not abort the entire directory load.
-
-        Args:
-            directory: Root directory to scan for .md files recursively.
-
-        Returns:
-            Flat list of all Document objects from all discovered files.
-
-        Raises:
-            LoaderError: Only if the directory itself does not exist.
-        """
-        if not directory.exists() or not directory.is_dir():
-            raise LoaderError(
-                f"Invalid directory: {directory}",
-                context={"directory": str(directory)},
-            ) from None
-        
-        md_files = list(directory.rglob("*.md"))
-        all_docs = []
-        for file_path in md_files:
-            try:
-                docs = await self.load(file_path)
-                all_docs.extend(docs)
-            except LoaderError as e:
-                logger.warning("markdown_file_skipped", path=str(file_path), error=str(e))
-        logger.info("directory_loaded", directory=str(directory), file_count=len(md_files), doc_count=len(all_docs))
-        return all_docs
-        
 
 
 # ── PDF Loader ─────────────────────────────────────────────────────────────────
@@ -185,7 +150,6 @@ class PDFLoader:
                     "original_error": str(exc),
                 },
             ) from exc
-        return []
 
 class TextLoader:
     """Loads plain Text (.txt) files into LlamaIndex Document objects."""
@@ -222,37 +186,3 @@ class TextLoader:
                 f"Failed to load text: {path}",
                 context={"file_path": str(path), "original_error": str(exc)},
             ) from exc
-        return []
-
-    async def load_directory(self, directory: Path) -> list[Document]:
-        """Load all Text files from a directory tree recursively.
-
-        Uses `rglob("*.txt")` to discover every Text file under `directory`.
-        Files that fail individually are skipped and logged, so a single
-        corrupt file does not abort the entire directory load.
-
-        Args:
-            directory: Root directory to scan for .txt files recursively.
-
-        Returns:
-            Flat list of all Document objects from all discovered files.
-
-        Raises:
-            LoaderError: Only if the directory itself does not exist.
-        """
-        if not directory.exists() or not directory.is_dir():
-            raise LoaderError(
-                f"Invalid directory: {directory}",
-                context={"directory": str(directory)},
-            ) from None
-        
-        md_files = list(directory.rglob("*.txt"))
-        all_docs = []
-        for file_path in md_files:
-            try:
-                docs = await self.load(file_path)
-                all_docs.extend(docs)
-            except LoaderError as e:
-                logger.warning("text_file_skipped", path=str(file_path), error=str(e))
-        logger.info("directory_loaded", directory=str(directory), file_count=len(md_files), doc_count=len(all_docs))
-        return all_docs

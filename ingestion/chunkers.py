@@ -114,6 +114,8 @@ class SemanticChunker:
 
 # ── Private Helpers ────────────────────────────────────────────────────────────
 
+_TIKTOKEN_ENCODER = tiktoken.get_encoding("cl100k_base")
+
 def _estimate_tokens(text: str) -> int:
     """Estimate token count for a text string.
 
@@ -130,5 +132,4 @@ def _estimate_tokens(text: str) -> int:
         Approximate token count.
 
     """
-    enc = tiktoken.get_encoding("cl100k_base")
-    return len(enc.encode(text))
+    return len(_TIKTOKEN_ENCODER.encode(text))

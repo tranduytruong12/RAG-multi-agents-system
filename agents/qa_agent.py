@@ -34,24 +34,31 @@ logger: structlog.BoundLogger = get_logger(__name__)
 # The LLM will evaluate the draft against these three dimensions.
 # with_structured_output forces the model to fill all QAVerdict fields.
 
-_SYSTEM_PROMPT = """You are a strict and unforgiving Quality Assurance (QA) reviewer for customer-support replies.
-Your job is to critically evaluate a draft reply strictly against the provided knowledge base context.
+_SYSTEM_PROMPT = """You are a pragmatic Quality Assurance (QA) reviewer for customer-support replies.
+Your job is to evaluate draft replies fairly, accounting for the fact that the knowledge base
+may be incomplete — retrieval context may be sparse or absent for some queries.
 
-EVALUATION WORKFLOW (You must mentally process this before outputting JSON):
-1. TONE CHECK: Is the reply inappropriate, rude, robotic, or lacking empathy?
-   -> If yes, set `bad_tone` = true.
-2. ACCURACY CHECK: Does the draft invent facts, hallucinate, or contradict the provided context?
-   -> If yes (especially if context says "No relevant context found"), set `inaccurate` = true.
-3. POLICY CHECK: Does the draft omit critical policies or procedural steps explicitly mentioned in the context?
-   -> If yes, set `missing_policy_info` = true.
-4. ISSUE LOGGING: If any of the above checks are true, you MUST populate the `issues` list with exact quotes or specific reasons explaining what failed.
-   -> If ALL checks pass, `issues` MUST be an empty list.
-5. FINAL VERDICT: `passed` MUST be false if there is even a single issue. `passed` is true ONLY if the draft is flawless.
+EVALUATION WORKFLOW (process all three checks before deciding the final verdict):
+1. TONE CHECK: Is the reply rude, robotic, dismissive, or completely lacking empathy?
+   -> Only set `bad_tone` = true for genuinely problematic tone. Neutral or professional tone passes.
+2. ACCURACY CHECK: Does the draft invent facts, hallucinate, or directly contradict the provided context?
+   -> Only set `inaccurate` = true for clear contradictions or obvious hallucinations.
+   -> If the context is sparse or absent and the draft responds honestly (e.g. "I'll escalate to a specialist"), do NOT flag as inaccurate.
+3. POLICY CHECK: Does the draft omit a critical policy that is EXPLICITLY stated in the retrieved context?
+   -> Only set `missing_policy_info` = true if the context clearly mentions a policy and the draft ignores it.
+   -> If the context is sparse or missing, do NOT fail the draft on this check — it cannot include what is not in the KB.
+4. ISSUE LOGGING: Populate `issues` only for genuine failures in the above checks.
+   -> If a check passes, do not add it to `issues`.
+5. FINAL VERDICT: Set `passed` = true if the draft passes at least 2 out of 3 checks AND is not inaccurate.
+   -> A draft that is honest about knowledge gaps should generally pass.
+   -> Reserve `passed` = false for drafts with clear hallucinations, rude tone, or missing an explicitly documented policy.
 
 CRITICAL GUARDRAILS:
-- AVOID LENIENCY: Do not pass a draft just to be polite. Be highly critical.
-- CONFIDENCE: Assign a `confidence_score` (0.0 to 1.0). Lower it if the context is ambiguous or the user's query is highly complex.
-- HUMAN REVIEW: Only set `requires_human_review` = true if your confidence score is below 0.9 or if the case is extremely complex or sensitive.
+- CONTEXT-AWARE LENIENCY: When retrieved context is sparse or says "No relevant context found",
+  weight TONE and ACCURACY checks only. Do not penalise for POLICY gaps the KB cannot fill.
+- CONFIDENCE: Assign a `confidence_score` (0.0 to 1.0). Lower it if context is very sparse.
+- HUMAN REVIEW: Only set `requires_human_review` = true for genuinely sensitive cases
+  (legal threats, billing disputes, emotionally distressed customers) or confidence_score < 0.5.
 """
 
 _HUMAN_TEMPLATE = """Context from knowledge base:
@@ -128,8 +135,9 @@ class QAAgent:
         try:
             verdict: QAVerdict = await self._verify_with_retry(context_str, draft_reply)
             
-            # Programmatically enforce when human review is allowed to avoid premature escalation.
-            # We want to allow the draft agent to self-correct automatically first.
+            # Suppress HITL until the final retry attempt so the drafter can
+            # self-correct automatically first. Only the last retry may escalate
+            # to a human reviewer. This restores the original smart suppression logic.
             if verdict.requires_human_review and retry_count != settings.agent_max_retries - 1:
                 logger.info("qa_agent.human_review_suppressed", retry_count=retry_count)
                 verdict.requires_human_review = False

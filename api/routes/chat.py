@@ -66,6 +66,27 @@ _query_rewriter: QueryRewriter | None = None
 _session_histories: dict[str, deque[dict[str, str]]] = {}
 
 
+def _build_conversation_history(turns: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Convert API-layer session turns into the role/content format consumed by agents.
+
+    This is the **single coupling point** between the storage layer and the agent layer.
+    When upgrading to a persistent store (Option C: Redis / Option D: LangGraph backend),
+    only this function and the ``_session_histories`` lookup need to change.
+    All agents read ``state["conversation_history"]`` and are therefore store-agnostic.
+
+    Args:
+        turns: List of {``query``, ``reply``} dicts from the session deque.
+
+    Returns:
+        List of {``role``, ``content``} dicts ordered oldest → newest.
+    """
+    history: list[dict[str, str]] = []
+    for turn in turns:
+        history.append({"role": "user", "content": turn["query"]})
+        history.append({"role": "assistant", "content": turn["reply"]})
+    return history
+
+
 def get_orchestrator() -> OrchestratorAgent:
     """Return the shared OrchestratorAgent singleton, creating it on first call."""
     global _orchestrator  # noqa: PLW0603
@@ -196,6 +217,7 @@ async def chat(request: ChatRequest) -> JSONResponse:
         deque(maxlen=settings.memory_window_size),
     )
     recent_turns: list[dict[str, str]] = list(history_deque)
+    conversation_history = _build_conversation_history(recent_turns)
 
     # Attempt contextual rewriting only when the feature is enabled and there
     # is at least one previous turn to provide context.
@@ -227,6 +249,7 @@ async def chat(request: ChatRequest) -> JSONResponse:
         "requires_human_review": False,
         "human_feedback": None,
         "messages": [],
+        "conversation_history": conversation_history,
     }
 
     try:

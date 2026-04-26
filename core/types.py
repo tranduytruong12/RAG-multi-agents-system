@@ -55,6 +55,12 @@ class SupportState(TypedDict):
             The DraftWriterAgent incorporates this on the next retry cycle.
         messages: Append-only list of agent step records for audit logging.
             Uses operator.add reducer so LangGraph accumulates across nodes.
+        conversation_history: Ordered list of prior conversation turns injected
+            by the API layer before graph invocation. Format: list of
+            {"role": "user"|"assistant", "content": str} dicts. Empty list for
+            first-turn queries. Agents read this field but never write it.
+            Swapping the storage backend (in-memory → Redis → LangGraph) only
+            requires updating chat.py, not any agent.
     """
 
     user_query: str
@@ -72,6 +78,8 @@ class SupportState(TypedDict):
     human_feedback: str | None
     # Append-only message history via LangGraph reducer
     messages: Annotated[list[dict], operator.add]
+    # Prior conversation turns from the session store — injected at API layer.
+    conversation_history: list[dict]
 
 
 # ── QA Verdict ────────────────────────────────────────────────────────────────

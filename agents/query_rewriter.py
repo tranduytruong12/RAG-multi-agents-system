@@ -29,7 +29,7 @@ import time
 from collections.abc import Sequence
 
 import structlog
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from tenacity import retry, stop_after_attempt, wait_exponential
 
@@ -70,9 +70,8 @@ Rules:
 - Preserve the original language (Vietnamese stays Vietnamese, English stays English).\
 """
 
-_HUMAN_TEMPLATE = """\
-Conversation history (oldest first):
-{history}
+_FINAL_HUMAN_TEMPLATE = """\
+Based on the conversation history above, rewrite the following follow-up query so it is fully self-contained and optimally formatted for a vector search engine.
 
 Follow-up query: {query}
 Rewritten query:\
@@ -98,15 +97,14 @@ class QueryRewriter:
     async def rewrite(
         self,
         query: str,
-        recent_turns: Sequence[dict[str, str]],
+        conversation_history: list[dict],
     ) -> tuple[str, bool]:
         """Rewrite a query if it appears to reference earlier conversation turns.
 
         Args:
             query: The raw user query for the current turn.
-            recent_turns: Ordered list (oldest first) of previous turns, each a
-                dict with keys ``"query"`` (user's original text) and
-                ``"reply"`` (agent's final response).
+            conversation_history: Ordered list (oldest first) of previous turns, each a
+                dict with keys ``"role"`` (user or assistant) and ``"content"``.
 
         Returns:
             A ``(rewritten_query, was_rewritten)`` tuple:
@@ -114,7 +112,7 @@ class QueryRewriter:
               rewriting was needed).
             - ``was_rewritten``: True if the LLM was actually invoked.
         """
-        if not recent_turns:
+        if not conversation_history:
             return query, False
 
         # ── Step 1: Heuristic gate (zero cost but can lead to low performance) ───────────────────────────────
@@ -129,12 +127,12 @@ class QueryRewriter:
         logger.info(
             "query_rewriter.rewrite.start",
             query_preview=query[:80],
-            num_turns=len(recent_turns),
+            num_turns=len(conversation_history) // 2,
         )
         start = time.monotonic()
 
         try:
-            rewritten = await self._rewrite_with_retry(query, recent_turns)
+            rewritten = await self._rewrite_with_retry(query, conversation_history)
         except Exception as exc:
             # On any failure, log and gracefully fall back to the original query.
             logger.warning(
@@ -161,25 +159,27 @@ class QueryRewriter:
     async def _rewrite_with_retry(
         self,
         query: str,
-        recent_turns: Sequence[dict[str, str]],
+        conversation_history: list[dict],
     ) -> str:
         """Call the LLM to produce a self-contained rewrite of the query."""
-        history_lines: list[str] = []
-        for turn in recent_turns:
-            # Truncate long replies to keep the prompt lean.
-            reply_preview = turn["reply"][:200].rstrip()
-            if len(turn["reply"]) > 200:
-                reply_preview += "..."
-            history_lines.append(f"Customer: {turn['query']}")
-            history_lines.append(f"Agent: {reply_preview}")
+        messages: list[BaseMessage] = [SystemMessage(content=_SYSTEM_PROMPT)]
 
-        history_str = "\n".join(history_lines)
-        human_content = _HUMAN_TEMPLATE.format(history=history_str, query=query)
+        # Append native history messages
+        for msg in conversation_history:
+            content = msg.get("content", "")
+            if msg.get("role") == "assistant":
+                # Truncate long replies to keep the prompt lean for rewriting
+                reply_preview = content[:200].rstrip()
+                if len(content) > 200:
+                    reply_preview += "..."
+                messages.append(AIMessage(content=reply_preview))
+            elif msg.get("role") == "user":
+                messages.append(HumanMessage(content=content))
 
-        messages = [
-            SystemMessage(content=_SYSTEM_PROMPT),
-            HumanMessage(content=human_content),
-        ]
+        # Append final request to rewrite the query
+        final_human_content = _FINAL_HUMAN_TEMPLATE.format(query=query)
+        messages.append(HumanMessage(content=final_human_content))
+
         response = await self._llm.ainvoke(messages)
         rewritten = response.content.strip()
 

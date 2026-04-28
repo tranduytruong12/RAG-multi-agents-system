@@ -89,7 +89,7 @@ _BASE_FINAL_HUMAN = """Context from knowledge base:
 Customer intent: {intent}
 Customer query: {query}
 
-Write a professional and friendly reply (ONLY based on the context):"""
+Write a professional and friendly reply (ONLY based on the context and conversation history):"""
 
 _FEEDBACK_FINAL_HUMAN = """Context from knowledge base:
 {context}
@@ -160,6 +160,11 @@ class DraftWriterAgent:
 
         return {
             "draft_reply": draft,
+            # Reset human_feedback to None after consuming it so stale feedback
+            # does not persist into _route_after_qa on subsequent QA cycles.
+            # Without this reset, the router's `if state.get("human_feedback")`
+            # guard would always be truthy, permanently bypassing escalation logic.
+            "human_feedback": None,
             "messages": [AgentAction(
                 agent_name="DraftWriterAgent",
                 action="draft_reply",

@@ -55,6 +55,7 @@ from retrieval.retriever import HybridRetriever
 from .drafter import DraftWriterAgent
 from .intent_classifier import IntentClassifierAgent
 from .qa_agent import QAAgent
+from .query_rewriter import QueryRewriter
 
 logger: structlog.BoundLogger = get_logger(__name__)
 
@@ -84,6 +85,7 @@ class OrchestratorAgent:
         self._retriever: HybridRetriever = HybridRetriever()
         self._drafter: DraftWriterAgent = DraftWriterAgent()
         self._qa_agent: QAAgent = QAAgent()
+        self._query_rewriter: QueryRewriter = QueryRewriter()
 
         self._graph = self._build_graph()
 
@@ -270,14 +272,11 @@ class OrchestratorAgent:
         return await self._intent_classifier.classify(state)
 
     async def _node_retrieve(self, state: SupportState) -> dict:
-        """Node 2 — Run HybridRetriever and return retrieved context as plain strings.
+        """Node 2 — Run QueryRewriter and HybridRetriever and return retrieved context.
 
-        This is the ONLY node that may call LlamaIndex code (via HybridRetriever).
+        This node first rewrites the query using conversation history (if enabled),
+        then calls LlamaIndex HybridRetriever to fetch context.
         All other nodes must NOT import LlamaIndex symbols.
-
-        build_index() is called lazily on the first request so the expensive
-        ChromaDB connection and BM25 index construction only happen once per
-        OrchestratorAgent instance lifetime.
         """
         # Lazy initialization: build the fusion index only on the first call.
         if self._retriever._fusion_retriever is None:
@@ -285,20 +284,42 @@ class OrchestratorAgent:
             await self._retriever.build_index()
             logger.info("orchestrator.retriever.build_index.done")
 
+        messages = []
+        query_to_retrieve = state["user_query"]
+
+        if settings.enable_query_rewriting and state.get("conversation_history"):
+            start_rewrite = time.monotonic()
+            query_to_retrieve, was_rewritten = await self._query_rewriter.rewrite(
+                state["user_query"], state["conversation_history"]
+            )
+            if was_rewritten:
+                latency_rewrite = (time.monotonic() - start_rewrite) * 1000
+                messages.append(AgentAction(
+                    agent_name="QueryRewriter",
+                    action="rewrite",
+                    input_summary=f"original: {state['user_query'][:80]}",
+                    output_summary=f"rewritten: {query_to_retrieve[:80]}",
+                    latency_ms=latency_rewrite,
+                    success=True,
+                ).model_dump())
+
         start = time.monotonic()
-        results = await self._retriever.retrieve(state["user_query"], top_k=5)
+        results = await self._retriever.retrieve(query_to_retrieve, top_k=5)
         latency_ms = (time.monotonic() - start) * 1000
         context_strings = [r.chunk.content for r in results]
+        
+        messages.append(AgentAction(
+            agent_name="HybridRetriever",
+            action="retrieve",
+            input_summary=f"query: {query_to_retrieve[:80]}",
+            output_summary=f"retrieved {len(results)} chunks",
+            latency_ms=latency_ms,
+            success=True,
+        ).model_dump())
+
         return {
             "retrieved_context": context_strings,
-            "messages": [AgentAction(
-                agent_name="HybridRetriever",
-                action="retrieve",
-                input_summary=f"query: {state['user_query'][:80]}",
-                output_summary=f"retrieved {len(results)} chunks",
-                latency_ms=latency_ms,
-                success=True,
-            ).model_dump()]
+            "messages": messages
         }
 
     async def _node_draft_reply(self, state: SupportState) -> dict:

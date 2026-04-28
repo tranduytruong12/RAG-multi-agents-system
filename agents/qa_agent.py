@@ -138,7 +138,7 @@ class QAAgent:
             # Suppress HITL until the final retry attempt so the drafter can
             # self-correct automatically first. Only the last retry may escalate
             # to a human reviewer. This restores the original smart suppression logic.
-            if verdict.requires_human_review and retry_count != settings.agent_max_retries - 1:
+            if retry_count != settings.agent_max_retries - 1:
                 logger.info("qa_agent.human_review_suppressed", retry_count=retry_count)
                 verdict.requires_human_review = False
 

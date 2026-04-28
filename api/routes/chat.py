@@ -31,7 +31,6 @@ from langgraph.types import Command
 from pydantic import BaseModel, Field
 
 from agents.orchestrator import OrchestratorAgent
-from agents.query_rewriter import QueryRewriter
 from config.settings import settings
 from core.exceptions import APIError
 from core.logging import bind_request_context, get_logger
@@ -45,22 +44,21 @@ router = APIRouter(tags=["chat"])
 # Built once on first call and reused across requests.
 # In tests these are replaced via dependency override or direct monkeypatching.
 _orchestrator: OrchestratorAgent | None = None
-_query_rewriter: QueryRewriter | None = None
 
 # Session history store: maps session_id → deque of {query, reply} dicts.
 # deque(maxlen=N) automatically drops the oldest turn when N is exceeded,
 # implementing the sliding window without any manual pruning.
 # Example: _session_histories = {
 #     "session_123": deque([
-#         {"role": "user", "content": "Xin chào"},
-#         {"role": "assistant", "content": "Chào bạn! Mình có thể giúp gì?"},
-#         {"role": "user", "content": "Giải thích RAG là gì"},
-#         {"role": "assistant", "content": "RAG là viết tắt của Retrieval-Augmented Generation..."},
+#         {"query": "Xin chào",
+#         "reply": "Chào bạn! Mình có thể giúp gì?"},
+#         {"query": "Giải thích RAG là gì",
+#         "reply": "RAG là viết tắt của Retrieval-Augmented Generation..."},
 #     ], maxlen=10),
 
 #     "session_456": deque([
-#         {"role": "user", "content": "What is machine learning?"},
-#         {"role": "assistant", "content": "Machine learning is a subset of AI..."},
+#         {"query": "What is machine learning?",
+#         "reply": "Machine learning is a subset of AI..."},
 #     ], maxlen=10),
 # }
 _session_histories: dict[str, deque[dict[str, str]]] = {}
@@ -93,14 +91,6 @@ def get_orchestrator() -> OrchestratorAgent:
     if _orchestrator is None:
         _orchestrator = OrchestratorAgent()
     return _orchestrator
-
-
-def get_query_rewriter() -> QueryRewriter:
-    """Return the shared QueryRewriter singleton, creating it on first call."""
-    global _query_rewriter  # noqa: PLW0603
-    if _query_rewriter is None:
-        _query_rewriter = QueryRewriter()
-    return _query_rewriter
 
 
 def get_retriever():
@@ -210,7 +200,7 @@ async def chat(request: ChatRequest) -> JSONResponse:
         query_preview=request.query[:80],
     )
 
-    # ── Short Window Query Rewriting ──────────────────────────────────────────
+    # ── Context and State Preparation ──────────────────────────────────────────
     # Load the session's recent turn history (deque is created on first access).
     history_deque = _session_histories.setdefault(
         request.session_id,
@@ -219,25 +209,8 @@ async def chat(request: ChatRequest) -> JSONResponse:
     recent_turns: list[dict[str, str]] = list(history_deque)
     conversation_history = _build_conversation_history(recent_turns)
 
-    # Attempt contextual rewriting only when the feature is enabled and there
-    # is at least one previous turn to provide context.
-    if settings.enable_query_rewriting and recent_turns:
-        rewriter = get_query_rewriter()
-        enriched_query, was_rewritten = await rewriter.rewrite(
-            request.query, recent_turns
-        )
-        if was_rewritten:
-            logger.info(
-                "chat.query_rewritten",
-                session_id=request.session_id,
-                original_query=request.query[:80],
-                rewritten_query=enriched_query[:80],
-            )
-    else:
-        enriched_query = request.query
-
     initial_state: SupportState = {
-        "user_query": enriched_query,      # pipeline sees the enriched query
+        "user_query": request.query,      # pipeline sees the original query
         "session_id": request.session_id,
         "intent": "",
         "retrieved_context": [],
